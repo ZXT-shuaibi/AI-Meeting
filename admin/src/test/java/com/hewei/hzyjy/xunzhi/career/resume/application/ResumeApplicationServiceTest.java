@@ -214,6 +214,7 @@ class ResumeApplicationServiceTest {
                 mock(CareerInterviewExecutionBridge.class),
                 new HybridCompactingChatMemory(request -> null, new InterviewRuleBasedScorer(), new DecisionIndex()),
                 structuringService,
+                new ResumePdfTextExtractor(),
                 emptyProvider()
         );
     }

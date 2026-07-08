@@ -17,10 +17,6 @@ import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.io.RandomAccessReadBuffer;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -30,7 +26,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.Writer;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -57,7 +52,6 @@ public class ResumeApplicationService {
     private static final int MAX_DOCX_ENTRY_BYTES = 2 * 1024 * 1024;
     private static final int MAX_DOCX_TOTAL_UNCOMPRESSED_BYTES = 4 * 1024 * 1024;
     private static final int MAX_DOCX_ENTRIES = 128;
-    private static final int MAX_PDF_PAGES = 40;
     private static final int MAX_JD_LENGTH = 12000;
     private static final int MAX_QUESTION_LENGTH = 4000;
     private static final int MAX_ANSWER_LENGTH = 12000;
@@ -70,6 +64,7 @@ public class ResumeApplicationService {
     private final CareerInterviewExecutionBridge interviewExecutionBridge;
     private final HybridCompactingChatMemory chatMemory;
     private final ResumeStructuringService resumeStructuringService;
+    private final ResumePdfTextExtractor resumePdfTextExtractor;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
@@ -289,7 +284,7 @@ public class ResumeApplicationService {
             String ext = extension(safeFilename(file));
             if ("pdf".equals(ext)) {
                 try (InputStream input = file.getInputStream()) {
-                    return extractPdfText(input);
+                    return resumePdfTextExtractor.extract(input);
                 }
             }
             byte[] bytes = file.getBytes();
@@ -300,70 +295,6 @@ public class ResumeApplicationService {
         } catch (Exception ex) {
             throw new IllegalArgumentException("Resume parse failed: " + ex.getMessage(), ex);
         }
-    }
-
-    private String extractPdfText(InputStream input) throws Exception {
-        try (RandomAccessReadBuffer buffer = new RandomAccessReadBuffer(input);
-             PDDocument document = Loader.loadPDF(buffer)) {
-            if (document.isEncrypted()) {
-                throw new IllegalArgumentException("Encrypted PDF resumes are not supported");
-            }
-            if (document.getNumberOfPages() > MAX_PDF_PAGES) {
-                throw new IllegalArgumentException("PDF resume exceeds " + MAX_PDF_PAGES + " page limit");
-            }
-            PDFTextStripper pdfStripper = new PDFTextStripper();
-            pdfStripper.setSortByPosition(true);
-            CappedResumeTextWriter writer = new CappedResumeTextWriter(MAX_RESUME_TEXT_LENGTH);
-            try {
-                pdfStripper.writeText(document, writer);
-            } catch (ResumeTextLimitReachedException ignored) {
-                log.debug("PDF resume text extraction stopped after reaching {} characters", MAX_RESUME_TEXT_LENGTH);
-            }
-            return writer.normalizedText();
-        }
-    }
-
-
-    private static final class CappedResumeTextWriter extends Writer {
-        private final StringBuilder buffer;
-        private final int maxChars;
-
-        private CappedResumeTextWriter(int maxChars) {
-            this.maxChars = maxChars;
-            this.buffer = new StringBuilder(Math.min(maxChars, 8192));
-        }
-
-        @Override
-        public void write(char[] cbuf, int off, int len) {
-            if (len <= 0) {
-                return;
-            }
-            if (buffer.length() >= maxChars) {
-                throw new ResumeTextLimitReachedException();
-            }
-            int writable = Math.min(len, maxChars - buffer.length());
-            buffer.append(cbuf, off, writable);
-            if (writable < len || buffer.length() >= maxChars) {
-                throw new ResumeTextLimitReachedException();
-            }
-        }
-
-        @Override
-        public void flush() {
-            // No external resource to flush.
-        }
-
-        @Override
-        public void close() {
-            // No external resource to close.
-        }
-
-        private String normalizedText() {
-            return buffer.toString().replaceAll("\\s+", " ").trim();
-        }
-    }
-
-    private static final class ResumeTextLimitReachedException extends RuntimeException {
     }
 
     private String extractDocxText(byte[] bytes) throws Exception {
