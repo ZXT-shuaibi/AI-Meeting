@@ -16,7 +16,8 @@ import com.hewei.hzyjy.xunzhi.common.convention.context.UserContext;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Result;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Results;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,10 +35,17 @@ import java.io.IOException;
 @Validated
 @RestController
 @RequestMapping("/api/xunzhi/v1")
-@RequiredArgsConstructor
 public class ResumeCareerController {
 
     private final ResumeApplicationService resumeApplicationService;
+    private final TaskExecutor careerTaskExecutor;
+
+    public ResumeCareerController(
+            ResumeApplicationService resumeApplicationService,
+            @Qualifier("careerTaskExecutor") TaskExecutor careerTaskExecutor) {
+        this.resumeApplicationService = resumeApplicationService;
+        this.careerTaskExecutor = careerTaskExecutor;
+    }
 
     @PostMapping(value = "/resumes/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<ResumeUploadResult> upload(
@@ -86,14 +94,25 @@ public class ResumeCareerController {
             @CurrentUser UserContext currentUser) throws IOException {
         SseEmitter emitter = new SseEmitter(120000L);
         emitter.send(SseEmitter.event().name("START").data("resume optimization started"));
-        CvOptimizationResult result = resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription());
-        if (result.reviewHistory() != null) {
-            for (int i = 0; i < result.reviewHistory().size(); i++) {
-                emitter.send(SseEmitter.event().name("ITERATION").data(result.reviewHistory().get(i)));
+        careerTaskExecutor.execute(() -> {
+            try {
+                CvOptimizationResult result = resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription());
+                if (result.reviewHistory() != null) {
+                    for (int i = 0; i < result.reviewHistory().size(); i++) {
+                        emitter.send(SseEmitter.event().name("ITERATION").data(result.reviewHistory().get(i)));
+                    }
+                }
+                emitter.send(SseEmitter.event().name("COMPLETE").data(result));
+                emitter.complete();
+            } catch (Exception ex) {
+                try {
+                    emitter.send(SseEmitter.event().name("ERROR").data(ex.getMessage() == null ? "resume optimization failed" : ex.getMessage()));
+                    emitter.complete();
+                } catch (IOException sendError) {
+                    emitter.completeWithError(sendError);
+                }
             }
-        }
-        emitter.send(SseEmitter.event().name("COMPLETE").data(result));
-        emitter.complete();
+        });
         return emitter;
     }
 

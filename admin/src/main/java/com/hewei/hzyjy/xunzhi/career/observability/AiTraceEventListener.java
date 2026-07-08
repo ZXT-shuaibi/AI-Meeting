@@ -1,7 +1,7 @@
 package com.hewei.hzyjy.xunzhi.career.observability;
 
 import com.alibaba.fastjson2.JSON;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.hewei.hzyjy.xunzhi.career.config.CareerObservabilityProperties;
 import com.hewei.hzyjy.xunzhi.career.observability.dao.entity.AiAgentSessionStatsDO;
@@ -126,15 +126,7 @@ public class AiTraceEventListener {
             return;
         }
         try {
-            LambdaUpdateWrapper<AiInvocationTraceDO> wrapper = new LambdaUpdateWrapper<>();
-            wrapper.eq(AiInvocationTraceDO::getTraceId, trace.getTraceId())
-                    .set(AiInvocationTraceDO::getEventType, trace.getEventType())
-                    .set(AiInvocationTraceDO::getEndTime, trace.getEndTime())
-                    .set(AiInvocationTraceDO::getDurationMs, trace.getDurationMs())
-                    .set(AiInvocationTraceDO::getOutputSummary, trace.getOutputSummary())
-                    .set(AiInvocationTraceDO::getErrorMessage, trace.getErrorMessage())
-                    .set(AiInvocationTraceDO::getErrorStackTrace, trace.getErrorStackTrace())
-                    .set(AiInvocationTraceDO::getUpdateTime, new Date());
+            UpdateWrapper<AiInvocationTraceDO> wrapper = completedUpdateWrapper(trace);
             int updated = mapper.update(null, wrapper);
             if (updated == 0) {
                 Date now = new Date();
@@ -148,6 +140,18 @@ public class AiTraceEventListener {
         }
     }
 
+    UpdateWrapper<AiInvocationTraceDO> completedUpdateWrapper(AiInvocationTraceDO trace) {
+        return new UpdateWrapper<AiInvocationTraceDO>()
+                .eq("trace_id", trace.getTraceId())
+                .set("event_type", trace.getEventType())
+                .set("end_time", trace.getEndTime())
+                .set("duration_ms", trace.getDurationMs())
+                .set("output_summary", trace.getOutputSummary())
+                .set("error_message", trace.getErrorMessage())
+                .set("error_stack_trace", trace.getErrorStackTrace())
+                .set("metadata_json", trace.getMetadataJson())
+                .set("update_time", new Date());
+    }
     private void updateStats(AiInvocationTraceDO trace, boolean success) {
         if (trace.getSessionId() == null || trace.getSessionId().isBlank()) {
             return;

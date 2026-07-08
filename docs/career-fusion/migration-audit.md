@@ -32,6 +32,7 @@
 - The orchestrator deep-copies CV state between review/tailor rounds, preventing failed or low-score optimization from mutating the stored primary resume object in memory.
 - `ResumeApplicationService` only overwrites the primary stored resume and re-embeds when the score gate passes; failed or low-score optimization results are returned as draft output without corrupting the saved resume.
 - `AiCvReviewer` and `AiScoredCvTailor` try `AgentRuntimeGateway` first, then fall back to Spring AI/heuristics.
+- `optimize/stream` returns the SSE emitter immediately, executes optimization on the dedicated career task executor, and emits `ITERATION` / `COMPLETE` / `ERROR` events from the background task.
 
 ### P2 Plan-Execute-Reflect Interview Planning
 
@@ -55,8 +56,10 @@
 - Redis stores hot traces and session trace lists.
 - MySQL stores cold invocation traces and tool executions.
 - Completed/failed events update the same `trace_id` instead of inserting fragmented rows.
+- Completed/failed cold-trace updates persist `metadata_json`, so degraded/fallback flags from Spring AI and Agent adapters survive beyond Redis hot traces.
 - Session aggregate stats are stored in `ai_agent_session_stats`.
 - `@EnableAsync` is enabled so event listeners can run asynchronously.
+- Career long-running work uses a dedicated `careerTaskExecutor`, isolating resume optimization SSE tasks from controller request threads.
 
 ## High-Availability Status
 
@@ -73,7 +76,7 @@
 - External LangChain4j integrations are still isolated behind adapters/profile gates; the default runtime uses local facade beans so the migration is demonstrable without forcing LangChain4j jars or external agent services into the Spring AI path.
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
-- `optimize/stream` emits SSE events after the synchronous optimization call returns; it exposes the streaming contract but is not yet token-by-token asynchronous execution.
+- `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
 
 ## Required Bootstrap
 
@@ -91,6 +94,7 @@ Verified on this branch with JDK 21:
 ```powershell
 mvn.cmd -pl admin "-Dtest=ResumeRagServiceTest,ResumeApplicationServiceTest,CareerResumeUploadSizeFilterTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=CvOptimizationOrchestratorTest,ResumeRagServiceTest,CareerInterviewExecutionBridgeTest,ResumeApplicationServiceTest" "-Denforcer.skip=true" test
-mvn.cmd -pl admin "-Dtest=AiCvReviewerTest,InterviewPlanningServiceTest,Bm25ScorerTest,DecisionIndexTest,CvOptimizationOrchestratorTest,QdrantResumeVectorStoreTest,LangChain4jAgentAdapterTest,LangChain4jEmbeddingAdapterTest,CareerInterviewExecutionBridgeTest,ResumeRagServiceTest,ResumeApplicationServiceTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin "-Dtest=ResumeCareerControllerTest,AiTraceEventListenerTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin "-Dtest=AiCvReviewerTest,InterviewPlanningServiceTest,Bm25ScorerTest,DecisionIndexTest,CvOptimizationOrchestratorTest,QdrantResumeVectorStoreTest,LangChain4jAgentAdapterTest,LangChain4jEmbeddingAdapterTest,CareerInterviewExecutionBridgeTest,ResumeRagServiceTest,ResumeApplicationServiceTest,CareerResumeUploadSizeFilterTest,ResumeCareerControllerTest,AiTraceEventListenerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -DskipTests "-Denforcer.skip=true" compile
 ```
