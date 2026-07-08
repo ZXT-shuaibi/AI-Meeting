@@ -30,15 +30,20 @@ import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_R
 @RequiredArgsConstructor
 public class QdrantResumeVectorStore {
 
+    private static final long FAILURE_BACKOFF_MILLIS = 30000L;
+
     private final XunzhiLangChain4jProperties properties;
     private volatile RestTemplate restTemplate;
     private volatile boolean collectionEnsured;
+    private volatile long unavailableUntilMillis;
 
     public void addAll(List<ResumeVectorDocument> incomingDocuments) {
         if (!available() || incomingDocuments == null || incomingDocuments.isEmpty()) {
             return;
         }
-        ensureCollection();
+        if (!ensureCollection()) {
+            return;
+        }
         Set<String> resumeIds = incomingDocuments.stream()
                 .map(document -> document.metadata() == null ? null : document.metadata().get(META_RESUME_ID))
                 .filter(value -> value != null && !value.isBlank())
@@ -66,7 +71,9 @@ public class QdrantResumeVectorStore {
         if (!available() || queryVector == null || queryVector.length == 0 || limit <= 0) {
             return List.of();
         }
-        ensureCollection();
+        if (!ensureCollection()) {
+            return List.of();
+        }
         Map<String, Object> body = new HashMap<>();
         body.put("vector", toVector(queryVector));
         body.put("limit", limit);
@@ -118,6 +125,7 @@ public class QdrantResumeVectorStore {
         return properties.isEnabled()
                 && qdrant != null
                 && qdrant.isEnabled()
+                && System.currentTimeMillis() >= unavailableUntilMillis
                 && StringUtils.hasText(qdrant.getHost())
                 && StringUtils.hasText(qdrant.getCollectionName());
     }
@@ -167,13 +175,13 @@ public class QdrantResumeVectorStore {
         }
     }
 
-    private void ensureCollection() {
+    private boolean ensureCollection() {
         if (collectionEnsured) {
-            return;
+            return true;
         }
         synchronized (this) {
             if (collectionEnsured) {
-                return;
+                return true;
             }
             try {
                 Map<String, Object> body = Map.of(
@@ -184,8 +192,12 @@ public class QdrantResumeVectorStore {
                 );
                 exchange(HttpMethod.PUT, "/collections/" + collectionName(), body);
                 collectionEnsured = true;
+                unavailableUntilMillis = 0L;
+                return true;
             } catch (Exception ex) {
+                unavailableUntilMillis = System.currentTimeMillis() + FAILURE_BACKOFF_MILLIS;
                 log.debug("Qdrant collection ensure failed; fallback store remains active. collection={}", collectionName(), ex);
+                return false;
             }
         }
     }
@@ -200,6 +212,7 @@ public class QdrantResumeVectorStore {
         try {
             return restTemplate().exchange(baseUrl() + path, method, new HttpEntity<>(body, headers), Map.class);
         } catch (RestClientException ex) {
+            unavailableUntilMillis = System.currentTimeMillis() + FAILURE_BACKOFF_MILLIS;
             throw new IllegalStateException("Qdrant REST call failed: " + path, ex);
         }
     }

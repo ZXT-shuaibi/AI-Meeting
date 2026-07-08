@@ -52,19 +52,33 @@ public class ResumeRagService {
         if (chunks.isEmpty()) {
             return List.of();
         }
-        List<float[]> vectors = embeddingGateway.embedAll(chunks.stream().map(ResumeChunk::content).toList());
+        List<float[]> vectors = embedForStorage(chunks);
         List<ResumeVectorDocument> documents = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
             ResumeChunk chunk = chunks.get(i);
             documents.add(ResumeVectorDocument.builder()
                     .id(UUID.randomUUID().toString())
                     .text(chunk.content())
-                    .vector(vectors.get(i))
+                    .vector(i < vectors.size() && vectors.get(i) != null ? vectors.get(i) : new float[0])
                     .metadata(chunk.metadata())
                     .build());
         }
         vectorStore.addAll(documents);
         return chunks;
+    }
+
+    private List<float[]> embedForStorage(List<ResumeChunk> chunks) {
+        try {
+            List<float[]> vectors = embeddingGateway.embedAll(chunks.stream().map(ResumeChunk::content).toList());
+            if (vectors != null && vectors.size() == chunks.size()) {
+                return vectors;
+            }
+            log.warn("Embedding gateway returned mismatched vector count, storing text-only chunks for BM25 fallback. expected={}, actual={}",
+                    chunks.size(), vectors == null ? 0 : vectors.size());
+        } catch (Exception ex) {
+            log.warn("Resume embedding failed during chunk storage, storing text-only chunks for BM25 fallback", ex);
+        }
+        return chunks.stream().map(chunk -> new float[0]).toList();
     }
 
     public List<String> retrieveTemplates(String query, int limit) {
@@ -154,14 +168,20 @@ public class ResumeRagService {
         Set<String> resumeIds = new LinkedHashSet<>();
         Set<String> coarseTypes = Set.of(CHUNK_TYPE_OVERVIEW, CHUNK_TYPE_SKILLS);
         for (String query : queries) {
-            List<ResumeVectorMatch> matches = vectorStore.search(
-                    embeddingGateway.embed(query),
-                    coarseTypes,
-                    resumeScope,
-                    metadataFilters,
-                    ragProperties.getVectorMinScoreCoarse(),
-                    targetLimit * 2
-            );
+            List<ResumeVectorMatch> matches;
+            try {
+                matches = vectorStore.search(
+                        embeddingGateway.embed(query),
+                        coarseTypes,
+                        resumeScope,
+                        metadataFilters,
+                        ragProperties.getVectorMinScoreCoarse(),
+                        targetLimit * 2
+                );
+            } catch (Exception ex) {
+                log.warn("Vector coarse recall failed, BM25 fine recall can still run. queryDigest={}", digest(query), ex);
+                continue;
+            }
             for (ResumeVectorMatch match : matches) {
                 String resumeId = match.document().metadata().get(META_RESUME_ID);
                 if (resumeId != null && !resumeId.isBlank()) {
@@ -178,26 +198,56 @@ public class ResumeRagService {
     private List<RetrievedChunk> hybridFineSearch(List<String> queries, Set<String> candidateResumeIds, Map<String, String> metadataFilters, int limit) {
         List<List<RetrievedChunk>> rankedLists = new ArrayList<>();
         for (String query : queries) {
-            List<ResumeVectorMatch> vectorMatches = vectorStore.search(
-                    embeddingGateway.embed(query),
-                    Set.of(),
-                    candidateResumeIds,
-                    metadataFilters,
-                    ragProperties.getVectorMinScoreFine(),
-                    limit
-            );
-            List<RetrievedChunk> chunks = vectorMatches.stream().map(this::toRetrievedChunk).toList();
-            List<String> texts = chunks.stream().map(RetrievedChunk::text).distinct().toList();
-            Map<String, Double> bm25Scores = Bm25Scorer.score(texts, query);
-            List<RetrievedChunk> bm25Ranked = chunks.stream()
-                    .sorted(Comparator.comparingDouble((RetrievedChunk c) -> bm25Scores.getOrDefault(c.text(), 0.0)).reversed())
-                    .distinct()
-                    .toList();
+            try {
+                List<ResumeVectorMatch> vectorMatches = vectorStore.search(
+                        embeddingGateway.embed(query),
+                        Set.of(),
+                        candidateResumeIds,
+                        metadataFilters,
+                        ragProperties.getVectorMinScoreFine(),
+                        limit
+                );
+                List<RetrievedChunk> vectorRanked = vectorMatches.stream().map(this::toRetrievedChunk).toList();
+                if (!vectorRanked.isEmpty()) {
+                    rankedLists.add(vectorRanked);
+                }
+            } catch (Exception ex) {
+                log.warn("Vector fine recall failed, continuing with independent BM25 lane. queryDigest={}", digest(query), ex);
+            }
+            List<RetrievedChunk> bm25Ranked = bm25Recall(query, candidateResumeIds, metadataFilters, limit);
             if (!bm25Ranked.isEmpty()) {
                 rankedLists.add(bm25Ranked);
             }
         }
         return rrfFusionChunks(rankedLists, ragProperties.getRrfK(), limit);
+    }
+
+    private List<RetrievedChunk> bm25Recall(
+            String query,
+            Set<String> candidateResumeIds,
+            Map<String, String> metadataFilters,
+            int limit) {
+        List<ResumeVectorDocument> documents;
+        try {
+            documents = vectorStore.findByResumeIds(candidateResumeIds);
+        } catch (Exception ex) {
+            log.warn("BM25 recall source lookup failed. queryDigest={}", digest(query), ex);
+            return List.of();
+        }
+        List<ResumeVectorDocument> filtered = documents.stream()
+                .filter(document -> matchesMetadata(document.metadata(), metadataFilters))
+                .toList();
+        if (filtered.isEmpty()) {
+            return List.of();
+        }
+        List<String> texts = filtered.stream().map(ResumeVectorDocument::text).distinct().toList();
+        Map<String, Double> bm25Scores = Bm25Scorer.score(texts, query);
+        return filtered.stream()
+                .map(document -> toRetrievedChunk(document, bm25Scores.getOrDefault(document.text(), 0.0)))
+                .filter(chunk -> chunk.rrfScore() > 0.0)
+                .sorted(Comparator.comparingDouble(RetrievedChunk::rrfScore).reversed())
+                .limit(limit)
+                .toList();
     }
 
     private List<RetrievedChunk> rrfFusionChunks(List<List<RetrievedChunk>> rankedLists, int k, int limit) {
@@ -257,6 +307,30 @@ public class ResumeRagService {
                 parseInt(metadata.get(META_CHUNK_INDEX)),
                 match.score()
         );
+    }
+
+    private RetrievedChunk toRetrievedChunk(ResumeVectorDocument document, double score) {
+        Map<String, String> metadata = document.metadata();
+        return new RetrievedChunk(
+                document.text(),
+                metadata.getOrDefault(META_RESUME_ID, ""),
+                metadata.getOrDefault(META_CHUNK_TYPE, ""),
+                parseInt(metadata.get(META_CHUNK_INDEX)),
+                score
+        );
+    }
+
+    private boolean matchesMetadata(Map<String, String> metadata, Map<String, String> metadataFilters) {
+        if (metadataFilters == null || metadataFilters.isEmpty()) {
+            return true;
+        }
+        Map<String, String> safeMetadata = metadata == null ? Map.of() : metadata;
+        for (Map.Entry<String, String> entry : metadataFilters.entrySet()) {
+            if (entry.getValue() != null && !entry.getValue().equals(safeMetadata.get(entry.getKey()))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private double bestScore(List<RetrievedChunk> chunks) {

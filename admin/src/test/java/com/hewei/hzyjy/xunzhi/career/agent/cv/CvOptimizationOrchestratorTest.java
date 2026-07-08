@@ -7,7 +7,8 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class CvOptimizationOrchestratorTest {
 
@@ -51,7 +52,7 @@ class CvOptimizationOrchestratorTest {
     }
 
     @Test
-    void returnsLatestUsableResultWhenTailorFails() {
+    void returnsLatestUsableResultWhenTailorFailsWithoutMutatingOriginalCv() {
         CvBO original = CvBO.builder().name("candidate").summary("java backend").build();
         CvReviewer reviewer = (cv, jd, templates) -> new CvReview(0.7, "feedback");
         ScoredCvTailor tailor = (cv, review, templates) -> {
@@ -61,7 +62,11 @@ class CvOptimizationOrchestratorTest {
 
         CvOptimizationResult result = orchestrator.optimize(original, "Java JD", List.of(), 3);
 
-        assertSame(original, result.cv());
+        assertNotSame(original, result.cv());
+        assertNull(original.getAdvice());
+        assertEquals(0, original.getOptimizationHistory().size());
+        assertEquals("feedback", result.cv().getAdvice());
+        assertEquals(1, result.cv().getOptimizationHistory().size());
         assertEquals(1, result.iterations());
         assertEquals("llm parse failed", result.failureReason());
     }

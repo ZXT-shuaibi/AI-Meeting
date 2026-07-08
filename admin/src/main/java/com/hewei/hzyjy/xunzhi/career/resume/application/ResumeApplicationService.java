@@ -2,6 +2,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
+import com.hewei.hzyjy.xunzhi.career.agent.interview.CareerInterviewExecutionBridge;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlan;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlanningService;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.ReflectionResult;
@@ -21,7 +22,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayInputStream;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -34,8 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
+import java.util.zip.ZipFile;
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -43,12 +47,21 @@ public class ResumeApplicationService {
 
     private static final Pattern XML_TAG = Pattern.compile("<[^>]+>");
     private static final Set<String> TEXT_EXTENSIONS = Set.of("txt", "md", "markdown", "json", "csv", "log");
+    private static final int MAX_RESUME_TEXT_LENGTH = 120000;
+    private static final long MAX_UPLOAD_BYTES = 5L * 1024 * 1024;
+    private static final int MAX_DOCX_ENTRY_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_DOCX_TOTAL_UNCOMPRESSED_BYTES = 4 * 1024 * 1024;
+    private static final int MAX_DOCX_ENTRIES = 128;
+    private static final int MAX_JD_LENGTH = 12000;
+    private static final int MAX_QUESTION_LENGTH = 4000;
+    private static final int MAX_ANSWER_LENGTH = 12000;
 
     private final ResumeStore resumeStore;
     private final JobMatchTaskStore jobMatchTaskStore;
     private final ResumeRagService resumeRagService;
     private final CvOptimizationOrchestrator cvOptimizationOrchestrator;
     private final InterviewPlanningService interviewPlanningService;
+    private final CareerInterviewExecutionBridge interviewExecutionBridge;
     private final HybridCompactingChatMemory chatMemory;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
@@ -83,8 +96,9 @@ public class ResumeApplicationService {
     }
 
     public JobMatchTaskResult matchResumes(Long userId, String jobDescription, int limit) {
+        validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
         String taskId = UUID.randomUUID().toString();
-        int boundedLimit = limit <= 0 ? 3 : limit;
+        int boundedLimit = Math.min(limit <= 0 ? 3 : limit, 20);
         JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId);
         jobMatchTaskStore.save(started, jobDescription, boundedLimit, null);
         long start = System.currentTimeMillis();
@@ -109,13 +123,17 @@ public class ResumeApplicationService {
     }
 
     public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription) {
+        validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
         List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)));
         CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, 3);
-        CvBO optimized = result.cv().toBuilder().id(resumeId).userId(userId).build();
-        resumeStore.save(optimized);
-        ensureResumeEmbedding(optimized);
+        CvBO latest = result.cv() == null ? cv : result.cv().toBuilder().id(resumeId).userId(userId).build();
+        if (result.scoreGatePassed()) {
+            resumeStore.save(latest);
+            embeddedResumeIds.remove(resumeId);
+            ensureResumeEmbedding(latest);
+        }
         chatMemory.add(memoryId(resumeId), MemoryMessage.builder()
                 .role(MemoryRole.ASSISTANT)
                 .content("Resume optimization decision: scoreGatePassed=" + result.scoreGatePassed()
@@ -124,7 +142,7 @@ public class ResumeApplicationService {
                 .metadata(Map.of("scene", "RESUME_TAILOR", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
         return CvOptimizationResult.builder()
-                .cv(optimized)
+                .cv(latest)
                 .bestReview(result.bestReview())
                 .iterations(result.iterations())
                 .scoreGatePassed(result.scoreGatePassed())
@@ -134,8 +152,10 @@ public class ResumeApplicationService {
     }
 
     public InterviewPlan planInterview(Long userId, String sessionId, Long resumeId, String jobDescription) {
+        validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
         String memoryId = memoryId(userId, sessionId, resumeId);
         InterviewPlan plan = interviewPlanningService.plan(memoryId, sessionId, getResume(userId, resumeId), jobDescription);
+        interviewExecutionBridge.publishPlan(userId, sessionId, plan);
         chatMemory.add(memoryId, MemoryMessage.builder()
                 .role(MemoryRole.ASSISTANT)
                 .content("Interview plan generated. firstQuestion=" + plan.firstQuestion() + ", alignment=" + plan.alignment())
@@ -145,6 +165,8 @@ public class ResumeApplicationService {
     }
 
     public ReflectionResult reflect(Long userId, String sessionId, Long resumeId, String currentQuestion, String userAnswer) {
+        validateTextLength(currentQuestion, MAX_QUESTION_LENGTH, "Current question");
+        validateTextLength(userAnswer, MAX_ANSWER_LENGTH, "User answer");
         CvBO cv = getResume(userId, resumeId);
         String memoryId = memoryId(userId, sessionId, resumeId);
         chatMemory.add(memoryId, MemoryMessage.builder()
@@ -221,7 +243,7 @@ public class ResumeApplicationService {
         if (!StringUtils.hasText(content)) {
             throw new IllegalArgumentException("Resume parse failed: no text content extracted");
         }
-        String summary = content.trim();
+        String summary = limitResumeText(content.trim());
         return CvBO.builder()
                 .userId(userId)
                 .cvType("upload")
@@ -235,6 +257,9 @@ public class ResumeApplicationService {
     private void validateUpload(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Resume file is empty");
+        }
+        if (file.getSize() > MAX_UPLOAD_BYTES) {
+            throw new IllegalArgumentException("Resume file exceeds 5MB upload limit");
         }
         String filename = safeFilename(file);
         String ext = extension(filename);
@@ -260,28 +285,91 @@ public class ResumeApplicationService {
     }
 
     private String extractDocxText(byte[] bytes) throws Exception {
-        StringBuilder text = new StringBuilder();
-        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                if ("word/document.xml".equals(entry.getName())) {
-                    String xml = new String(zip.readAllBytes(), StandardCharsets.UTF_8);
+        File tempFile = File.createTempFile("xunzhi-resume-", ".docx");
+        try {
+            try (FileOutputStream output = new FileOutputStream(tempFile)) {
+                output.write(bytes);
+            }
+            try (ZipFile zip = new ZipFile(tempFile)) {
+                validateDocxZip(zip);
+                ZipEntry documentXml = zip.getEntry("word/document.xml");
+                if (documentXml == null) {
+                    return "";
+                }
+                try (InputStream input = zip.getInputStream(documentXml)) {
+                    String xml = new String(readLimitedEntry(input, MAX_DOCX_ENTRY_BYTES), StandardCharsets.UTF_8);
                     String normalized = xml.replace("</w:p>", "\n").replace("</w:tr>", "\n");
-                    text.append(XML_TAG.matcher(normalized).replaceAll(" "));
-                    break;
+                    return limitResumeText(XML_TAG.matcher(normalized).replaceAll(" ").replaceAll("\\s+", " ").trim());
+                }
+            }
+        } finally {
+            if (!tempFile.delete()) {
+                log.debug("Temporary DOCX file cleanup deferred. path={}", tempFile.getAbsolutePath());
+            }
+        }
+    }
+
+    private void validateDocxZip(ZipFile zip) {
+        long totalSize = 0L;
+        int entries = 0;
+        java.util.Enumeration<? extends ZipEntry> enumeration = zip.entries();
+        while (enumeration.hasMoreElements()) {
+            ZipEntry entry = enumeration.nextElement();
+            entries++;
+            if (entries > MAX_DOCX_ENTRIES) {
+                throw new IllegalArgumentException("DOCX contains too many entries");
+            }
+            long size = entry.getSize();
+            if (!entry.isDirectory()) {
+                if (size < 0) {
+                    throw new IllegalArgumentException("DOCX entry has unknown uncompressed size: " + entry.getName());
+                }
+                if (size > MAX_DOCX_ENTRY_BYTES) {
+                    throw new IllegalArgumentException("DOCX entry is too large: " + entry.getName());
+                }
+                totalSize += size;
+                if (totalSize > MAX_DOCX_TOTAL_UNCOMPRESSED_BYTES) {
+                    throw new IllegalArgumentException("DOCX total uncompressed size exceeds limit");
                 }
             }
         }
-        return text.toString().replaceAll("\\s+", " ").trim();
+    }
+
+    private byte[] readLimitedEntry(InputStream input, int maxBytes) throws Exception {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream(Math.min(maxBytes, 8192));
+        byte[] buffer = new byte[8192];
+        int total = 0;
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            total += read;
+            if (total > maxBytes) {
+                throw new IllegalArgumentException("DOCX document.xml exceeds " + maxBytes + " bytes");
+            }
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
     }
 
     private String decodeUtf8(byte[] bytes) throws Exception {
         CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT);
-        return decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        return limitResumeText(decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString());
     }
 
+
+    private String limitResumeText(String content) {
+        if (content == null || content.length() <= MAX_RESUME_TEXT_LENGTH) {
+            return content;
+        }
+        return content.substring(0, MAX_RESUME_TEXT_LENGTH);
+    }
+
+    private void validateTextLength(String value, int maxLength, String fieldName) {
+        if (value != null && value.length() > maxLength) {
+            throw new IllegalArgumentException(fieldName + " length exceeds " + maxLength + " characters");
+        }
+    }
     private String inferTitle(String content) {
         String lower = content.toLowerCase();
         if (lower.contains("java")) {

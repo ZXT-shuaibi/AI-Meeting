@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
+import com.alibaba.fastjson2.JSON;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -19,7 +20,7 @@ public class CvOptimizationOrchestrator {
 
     public CvOptimizationResult optimize(CvBO cv, String jobDescription, List<String> referenceTemplates, int maxIterations) {
         int boundedMaxIterations = maxIterations <= 0 ? DEFAULT_MAX_ITERATIONS : Math.min(maxIterations, DEFAULT_MAX_ITERATIONS);
-        CvBO latestCv = cv;
+        CvBO latestCv = copyCv(cv);
         CvReview bestReview = null;
         List<CvReview> history = new ArrayList<>();
         String failureReason = null;
@@ -28,13 +29,14 @@ public class CvOptimizationOrchestrator {
         for (int i = 0; i < boundedMaxIterations; i++) {
             iterations = i + 1;
             try {
-                CvReview review = reviewer.review(latestCv, jobDescription, referenceTemplates);
+                CvReview review = reviewer.review(copyCv(latestCv), jobDescription, referenceTemplates);
                 if (review == null) {
                     failureReason = "Reviewer returned null";
                     break;
                 }
                 history.add(review);
                 bestReview = selectBetter(bestReview, review);
+                latestCv = copyCv(latestCv);
                 latestCv.addOptimizationRecord(review.feedback(), review.score());
                 latestCv.setAdvice(review.feedback());
                 if (review.score() > SCORE_GATE) {
@@ -44,11 +46,12 @@ public class CvOptimizationOrchestrator {
                     failureReason = "Score gate not reached after max iterations";
                     break;
                 }
-                latestCv = tailor.tailor(latestCv, review, referenceTemplates);
-                if (latestCv == null) {
+                CvBO tailored = tailor.tailor(copyCv(latestCv), review, referenceTemplates);
+                if (tailored == null) {
                     failureReason = "Tailor returned null";
                     break;
                 }
+                latestCv = copyCv(tailored);
             } catch (Exception ex) {
                 failureReason = ex.getMessage();
                 break;
@@ -66,6 +69,13 @@ public class CvOptimizationOrchestrator {
             return candidate;
         }
         return current;
+    }
+
+    private CvBO copyCv(CvBO cv) {
+        if (cv == null) {
+            return null;
+        }
+        return JSON.parseObject(JSON.toJSONString(cv), CvBO.class);
     }
 
     private CvOptimizationResult build(
