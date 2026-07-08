@@ -19,6 +19,10 @@
     <spring-cloud.version>2024.0.0</spring-cloud.version>
     <spring-cloud-alibaba.version>2022.0.0.0-RC2</spring-cloud-alibaba.version>
     <spring-ai.version>1.0.0</spring-ai.version>
+    <langchain4j.version>1.13.0</langchain4j.version>
+    <langchain4j-agentic.version>1.13.0-beta23</langchain4j-agentic.version>
+    <dashscope.version>2.22.13</dashscope.version>
+    <qdrant-client.version>1.16.0</qdrant-client.version>
     <mybatis-spring-boot-starter.version>3.5.9</mybatis-spring-boot-starter.version>
     <jjwt.version>0.9.1</jjwt.version>
     <fastjson2.version>2.0.36</fastjson2.version>

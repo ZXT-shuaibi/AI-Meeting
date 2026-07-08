@@ -88,6 +88,43 @@ xunfei:
     rta-api-key: ${XUNFEI_RTA_API_KEY:}
 
 xunzhi-agent:
+  langchain4j:
+    enabled: ${XUNZHI_LANGCHAIN4J_ENABLED:true}
+    base-url: ${XUNZHI_LANGCHAIN4J_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    api-key: ${XUNZHI_LANGCHAIN4J_API_KEY:${DASHSCOPE_API_KEY:}}
+    chat-model: ${XUNZHI_LANGCHAIN4J_CHAT_MODEL:qwen-plus}
+    embedding-model: ${XUNZHI_LANGCHAIN4J_EMBEDDING_MODEL:text-embedding-v3}
+    qdrant:
+      collection-name: ${XUNZHI_QDRANT_COLLECTION:xunzhi_resume}
+      host: ${XUNZHI_QDRANT_HOST:localhost}
+      port: ${XUNZHI_QDRANT_PORT:6334}
+      use-tls: ${XUNZHI_QDRANT_USE_TLS:false}
+      payload-text-key: ${XUNZHI_QDRANT_PAYLOAD_TEXT_KEY:content}
+      vector-size: ${XUNZHI_QDRANT_VECTOR_SIZE:1024}
+  career:
+    rag:
+      vector-min-score-coarse: ${XUNZHI_CAREER_RAG_VECTOR_MIN_SCORE_COARSE:0.60}
+      vector-min-score-fine: ${XUNZHI_CAREER_RAG_VECTOR_MIN_SCORE_FINE:0.55}
+      rrf-k: ${XUNZHI_CAREER_RAG_RRF_K:60}
+      coarse-recall-limit: ${XUNZHI_CAREER_RAG_COARSE_RECALL_LIMIT:20}
+      fine-recall-multiplier: ${XUNZHI_CAREER_RAG_FINE_RECALL_MULTIPLIER:5}
+      multi-query-count: ${XUNZHI_CAREER_RAG_MULTI_QUERY_COUNT:3}
+      cache-ttl-seconds: ${XUNZHI_CAREER_RAG_CACHE_TTL_SECONDS:3600}
+      rerank:
+        enabled: ${XUNZHI_CAREER_RAG_RERANK_ENABLED:true}
+        provider: ${XUNZHI_CAREER_RAG_RERANK_PROVIDER:dashscope}
+        model: ${XUNZHI_CAREER_RAG_RERANK_MODEL:qwen3-vl-rerank}
+        api-key: ${XUNZHI_CAREER_RAG_RERANK_API_KEY:${DASHSCOPE_API_KEY:}}
+    observability:
+      enabled: ${XUNZHI_CAREER_OBSERVABILITY_ENABLED:true}
+      redis-ttl-seconds: ${XUNZHI_CAREER_OBSERVABILITY_REDIS_TTL_SECONDS:604800}
+      scene-enabled:
+        RESUME_ANALYSIS: true
+        RESUME_REVIEW: true
+        RESUME_TAILOR: true
+        JD_ALIGNMENT: true
+        INTERVIEW_COORDINATION: true
+        INTERVIEW_REFLECTION: true
   security:
     require-xunfei-secrets: true
   storage:
@@ -123,11 +160,17 @@ xunzhi-agent:
     scheduled-pool-size: 8
     scheduled-thread-name-prefix: xunzhi-schedule-
   agent-binding:
-    general-agent-chat: ${XUNZHI_AGENT_GENERAL_CHAT:通用智能体}
-    interview-question-extraction: ${XUNZHI_AGENT_INTERVIEW_QUESTION_EXTRACTION:面试出题官}
-    interview-answer-evaluation: ${XUNZHI_AGENT_INTERVIEW_ANSWER_EVALUATION:用户答案评分官}
-    interview-demeanor: ${XUNZHI_AGENT_INTERVIEW_DEMEANOR:神态分析官}
-    interview-question-asking: ${XUNZHI_AGENT_INTERVIEW_QUESTION_ASKING:面试提问官}
+    general-agent-chat: ${XUNZHI_AGENT_GENERAL_CHAT:general-agent-chat}
+    interview-question-extraction: ${XUNZHI_AGENT_INTERVIEW_QUESTION_EXTRACTION:interview-question-extraction}
+    interview-answer-evaluation: ${XUNZHI_AGENT_INTERVIEW_ANSWER_EVALUATION:interview-answer-evaluation}
+    interview-demeanor: ${XUNZHI_AGENT_INTERVIEW_DEMEANOR:interview-demeanor}
+    interview-question-asking: ${XUNZHI_AGENT_INTERVIEW_QUESTION_ASKING:interview-question-asking}
+    resume-analysis: ${XUNZHI_AGENT_RESUME_ANALYSIS:resume-analysis}
+    resume-review: ${XUNZHI_AGENT_RESUME_REVIEW:resume-review}
+    resume-tailor: ${XUNZHI_AGENT_RESUME_TAILOR:resume-tailor}
+    jd-alignment: ${XUNZHI_AGENT_JD_ALIGNMENT:jd-alignment}
+    interview-coordination: ${XUNZHI_AGENT_INTERVIEW_COORDINATION:interview-coordination}
+    interview-reflection: ${XUNZHI_AGENT_INTERVIEW_REFLECTION:interview-reflection}
   flow-limit:
     enable: true
     time-window-seconds: 1

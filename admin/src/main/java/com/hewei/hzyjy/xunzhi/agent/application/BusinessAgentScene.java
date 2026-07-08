@@ -5,11 +5,17 @@ import java.util.List;
 
 public enum BusinessAgentScene {
 
-    GENERAL_AGENT_CHAT("general-agent-chat", "通用智能体"),
-    INTERVIEW_QUESTION_EXTRACTION("interview-question-extraction", "面试出题官", "面试题出题官"),
-    INTERVIEW_ANSWER_EVALUATION("interview-answer-evaluation", "用户答案评分官", "面试答案评分官"),
-    INTERVIEW_DEMEANOR("interview-demeanor", "神态分析官", "神态评分面试官", "表情分析面试官"),
-    INTERVIEW_QUESTION_ASKING("interview-question-asking", "面试提问官");
+    GENERAL_AGENT_CHAT("general-agent-chat", "general-agent-chat"),
+    INTERVIEW_QUESTION_EXTRACTION("interview-question-extraction", "interview-question-extraction"),
+    INTERVIEW_ANSWER_EVALUATION("interview-answer-evaluation", "interview-answer-evaluation"),
+    INTERVIEW_DEMEANOR("interview-demeanor", "interview-demeanor"),
+    INTERVIEW_QUESTION_ASKING("interview-question-asking", "interview-question-asking"),
+    RESUME_ANALYSIS("resume-analysis", "resume-analysis"),
+    RESUME_REVIEW("resume-review", "resume-review"),
+    RESUME_TAILOR("resume-tailor", "resume-tailor"),
+    JD_ALIGNMENT("jd-alignment", "jd-alignment"),
+    INTERVIEW_COORDINATION("interview-coordination", "interview-coordination"),
+    INTERVIEW_REFLECTION("interview-reflection", "interview-reflection");
 
     private final String code;
 

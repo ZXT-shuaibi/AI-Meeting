@@ -19,16 +19,35 @@ public class BusinessAgentBindingProperties {
 
     private String interviewQuestionAsking;
 
+    private String resumeAnalysis;
+
+    private String resumeReview;
+
+    private String resumeTailor;
+
+    private String jdAlignment;
+
+    private String interviewCoordination;
+
+    private String interviewReflection;
+
     public String resolveAgentName(BusinessAgentScene scene) {
         if (scene == null) {
             return null;
         }
-        return switch (scene) {
+        String configured = switch (scene) {
             case GENERAL_AGENT_CHAT -> generalAgentChat;
             case INTERVIEW_QUESTION_EXTRACTION -> interviewQuestionExtraction;
             case INTERVIEW_ANSWER_EVALUATION -> interviewAnswerEvaluation;
             case INTERVIEW_DEMEANOR -> interviewDemeanor;
             case INTERVIEW_QUESTION_ASKING -> interviewQuestionAsking;
+            case RESUME_ANALYSIS -> resumeAnalysis;
+            case RESUME_REVIEW -> resumeReview;
+            case RESUME_TAILOR -> resumeTailor;
+            case JD_ALIGNMENT -> jdAlignment;
+            case INTERVIEW_COORDINATION -> interviewCoordination;
+            case INTERVIEW_REFLECTION -> interviewReflection;
         };
+        return configured == null || configured.isBlank() ? scene.getDefaultAgentName() : configured;
     }
 }
