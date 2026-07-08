@@ -7,10 +7,13 @@ import com.hewei.hzyjy.xunzhi.ai.api.io.resp.AiChatStreamRespDTO;
 import com.hewei.hzyjy.xunzhi.ai.api.io.resp.AiMessageHistoryRespDTO;
 import com.hewei.hzyjy.xunzhi.ai.dao.entity.AiPropertiesDO;
 import com.hewei.hzyjy.xunzhi.ai.enums.AiPropritiesType;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.toolkit.xunfei.AIContentAccumulator;
 import io.micrometer.observation.ObservationRegistry;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -35,6 +38,7 @@ import reactor.core.publisher.FluxSink;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -44,7 +48,12 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class UniversalAiChatHandler implements AiChatHandler {
+
+    private static final String TRACE_SCENE_CODE = "LEGACY_AI_CHAT";
+
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
 
     @Override
     public String getType() {
@@ -58,6 +67,16 @@ public class UniversalAiChatHandler implements AiChatHandler {
     @Override
     public void streamToSink(AiPropertiesDO aiProperties, String userMessage, List<AiMessageHistoryRespDTO> historyMessages,
                              FluxSink<String> sink, AIContentAccumulator accumulator) throws Exception {
+        String traceId = UUID.randomUUID().toString();
+        long start = System.currentTimeMillis();
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        String provider = aiProperties == null ? null : aiProperties.getAiType();
+        String model = aiProperties == null ? null : aiProperties.getModelName();
+        String sessionId = legacySessionId(aiProperties);
+        if (tracePublisher != null) {
+            tracePublisher.started(traceId, TRACE_SCENE_CODE, sessionId, provider, model, userMessage);
+        }
+        try {
         ChatClient chatClient = createChatClient(aiProperties);
         List<Message> messages = buildMessages(aiProperties, userMessage, historyMessages);
 
@@ -132,6 +151,22 @@ public class UniversalAiChatHandler implements AiChatHandler {
         if (streamError[0] != null) {
             throw new RuntimeException(streamError[0]);
         }
+            if (tracePublisher != null) {
+                tracePublisher.completed(traceId, TRACE_SCENE_CODE, sessionId, provider, model, start, accumulator.getFullContent());
+            }
+        } catch (Exception ex) {
+            if (tracePublisher != null) {
+                tracePublisher.failed(traceId, TRACE_SCENE_CODE, sessionId, provider, model, start, ex);
+            }
+            throw ex;
+        }
+    }
+
+    private String legacySessionId(AiPropertiesDO aiProperties) {
+        if (aiProperties == null || aiProperties.getId() == null) {
+            return "legacy-ai-chat";
+        }
+        return "legacy-ai-chat:" + aiProperties.getId();
     }
 
     private ChatClient createChatClient(AiPropertiesDO aiProperties) {
