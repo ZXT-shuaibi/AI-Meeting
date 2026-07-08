@@ -29,10 +29,19 @@ public class HybridCompactingChatMemory {
     private final ImportanceScorer importanceScorer;
     private final DecisionIndex decisionIndex;
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
+    private final MysqlMemoryMessageStore coldStore;
     private final Map<String, List<MemoryMessage>> store = new ConcurrentHashMap<>();
 
     public HybridCompactingChatMemory(AiGateway aiGateway, ImportanceScorer importanceScorer, DecisionIndex decisionIndex) {
-        this(aiGateway, importanceScorer, decisionIndex, null);
+        this(aiGateway, importanceScorer, decisionIndex, null, null);
+    }
+
+    public HybridCompactingChatMemory(
+            AiGateway aiGateway,
+            ImportanceScorer importanceScorer,
+            DecisionIndex decisionIndex,
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+        this(aiGateway, importanceScorer, decisionIndex, redisTemplateProvider, null);
     }
 
     @Autowired
@@ -40,11 +49,13 @@ public class HybridCompactingChatMemory {
             AiGateway aiGateway,
             ImportanceScorer importanceScorer,
             DecisionIndex decisionIndex,
-            ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+            MysqlMemoryMessageStore coldStore) {
         this.aiGateway = aiGateway;
         this.importanceScorer = importanceScorer;
         this.decisionIndex = decisionIndex;
         this.redisTemplateProvider = redisTemplateProvider;
+        this.coldStore = coldStore;
     }
 
     public void add(String memoryId, MemoryMessage message) {
@@ -59,7 +70,8 @@ public class HybridCompactingChatMemory {
         }
         List<MemoryMessage> snapshot = List.copyOf(messages);
         store.put(memoryId, snapshot);
-        persist(memoryId, snapshot);
+        persistRedis(memoryId, snapshot);
+        persistCold(memoryId, snapshot);
     }
 
     public CompactedMemoryView view(String memoryId, int recentDecisionLimit) {
@@ -87,6 +99,7 @@ public class HybridCompactingChatMemory {
                 // Redis is best-effort recovery only.
             }
         }
+        persistCold(memoryId, List.of());
     }
 
     private List<MemoryMessage> compact(String memoryId, List<MemoryMessage> messages, int recentMessageCount) {
@@ -149,7 +162,7 @@ public class HybridCompactingChatMemory {
         return restored;
     }
 
-    private void persist(String memoryId, List<MemoryMessage> messages) {
+    private void persistRedis(String memoryId, List<MemoryMessage> messages) {
         StringRedisTemplate redisTemplate = redisTemplate();
         if (redisTemplate == null || memoryId == null) {
             return;
@@ -171,14 +184,17 @@ public class HybridCompactingChatMemory {
 
     @SuppressWarnings("unchecked")
     private List<MemoryMessage> restore(String memoryId) {
-        StringRedisTemplate redisTemplate = redisTemplate();
-        if (redisTemplate == null || memoryId == null) {
+        if (memoryId == null) {
             return List.of();
+        }
+        StringRedisTemplate redisTemplate = redisTemplate();
+        if (redisTemplate == null) {
+            return restoreCold(memoryId);
         }
         try {
             String json = redisTemplate.opsForValue().get(redisKey(memoryId));
             if (json == null || json.isBlank()) {
-                return List.of();
+                return restoreCold(memoryId);
             }
             return JSON.parseArray(json, JSONObject.class).stream()
                     .map(row -> MemoryMessage.builder()
@@ -189,8 +205,18 @@ public class HybridCompactingChatMemory {
                             .build())
                     .toList();
         } catch (Exception ignored) {
-            return List.of();
+            return restoreCold(memoryId);
         }
+    }
+
+    private void persistCold(String memoryId, List<MemoryMessage> messages) {
+        if (coldStore != null) {
+            coldStore.replace(memoryId, messages);
+        }
+    }
+
+    private List<MemoryMessage> restoreCold(String memoryId) {
+        return coldStore == null ? List.of() : coldStore.load(memoryId);
     }
 
     private MemoryRole parseRole(String value) {

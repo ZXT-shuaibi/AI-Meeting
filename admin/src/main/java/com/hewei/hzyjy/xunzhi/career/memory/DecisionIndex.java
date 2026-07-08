@@ -22,21 +22,29 @@ public class DecisionIndex {
 
     private final Map<Object, List<DecisionEntry>> index = new ConcurrentHashMap<>();
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
+    private final MysqlDecisionStore coldStore;
 
     public DecisionIndex() {
-        this.redisTemplateProvider = null;
+        this(null, null);
+    }
+
+    public DecisionIndex(ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+        this(redisTemplateProvider, null);
     }
 
     @Autowired
-    public DecisionIndex(ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
+    public DecisionIndex(ObjectProvider<StringRedisTemplate> redisTemplateProvider, MysqlDecisionStore coldStore) {
         this.redisTemplateProvider = redisTemplateProvider;
+        this.coldStore = coldStore;
     }
 
     public void record(Object memoryId, int messageIndex, String summary) {
         List<DecisionEntry> decisions = new ArrayList<>(getDecisions(memoryId));
         decisions.add(new DecisionEntry(messageIndex, summary, Instant.now()));
-        index.put(memoryId, List.copyOf(decisions));
-        persist(memoryId, decisions);
+        List<DecisionEntry> snapshot = List.copyOf(decisions);
+        index.put(memoryId, snapshot);
+        persistRedis(memoryId, snapshot);
+        persistCold(memoryId, snapshot);
     }
 
     public List<DecisionEntry> getDecisions(Object memoryId) {
@@ -86,9 +94,10 @@ public class DecisionIndex {
                 // Redis is a recovery layer only; clearing in-memory state is sufficient for local correctness.
             }
         }
+        persistCold(memoryId, List.of());
     }
 
-    private void persist(Object memoryId, List<DecisionEntry> decisions) {
+    private void persistRedis(Object memoryId, List<DecisionEntry> decisions) {
         StringRedisTemplate redisTemplate = redisTemplate();
         if (redisTemplate == null || memoryId == null) {
             return;
@@ -108,14 +117,17 @@ public class DecisionIndex {
     }
 
     private List<DecisionEntry> restore(Object memoryId) {
-        StringRedisTemplate redisTemplate = redisTemplate();
-        if (redisTemplate == null || memoryId == null) {
+        if (memoryId == null) {
             return List.of();
+        }
+        StringRedisTemplate redisTemplate = redisTemplate();
+        if (redisTemplate == null) {
+            return restoreCold(memoryId);
         }
         try {
             String json = redisTemplate.opsForValue().get(redisKey(memoryId));
             if (json == null || json.isBlank()) {
-                return List.of();
+                return restoreCold(memoryId);
             }
             return JSON.parseArray(json, JSONObject.class).stream()
                     .map(row -> new DecisionEntry(
@@ -125,8 +137,18 @@ public class DecisionIndex {
                     ))
                     .toList();
         } catch (Exception ignored) {
-            return List.of();
+            return restoreCold(memoryId);
         }
+    }
+
+    private void persistCold(Object memoryId, List<DecisionEntry> decisions) {
+        if (coldStore != null) {
+            coldStore.replace(memoryId, decisions);
+        }
+    }
+
+    private List<DecisionEntry> restoreCold(Object memoryId) {
+        return coldStore == null ? List.of() : coldStore.load(memoryId);
     }
 
     private Instant parseInstant(String value) {
