@@ -20,6 +20,7 @@ import java.util.stream.Collectors;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_CHUNK_INDEX;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_CHUNK_TYPE;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_RESUME_ID;
+import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_USER_ID;
 
 @Slf4j
 @Primary
@@ -105,6 +106,7 @@ public class ResilientResumeVectorStore implements ResumeVectorStore {
                 }
                 CareerResumeChunkDO row = new CareerResumeChunkDO();
                 row.setResumeId(resumeId.get());
+                row.setUserId(parseLong(metadata.get(META_USER_ID)).orElse(null));
                 row.setVectorId(document.id());
                 row.setChunkType(metadata.get(META_CHUNK_TYPE));
                 row.setChunkIndex(parseInt(metadata.get(META_CHUNK_INDEX)));
@@ -144,9 +146,13 @@ public class ResilientResumeVectorStore implements ResumeVectorStore {
         if (metadata == null) {
             metadata = Map.of(
                     META_RESUME_ID, String.valueOf(row.getResumeId()),
+                    META_USER_ID, row.getUserId() == null ? "" : String.valueOf(row.getUserId()),
                     META_CHUNK_TYPE, row.getChunkType(),
                     META_CHUNK_INDEX, String.valueOf(row.getChunkIndex())
             );
+        } else if (!metadata.containsKey(META_USER_ID) && row.getUserId() != null) {
+            metadata = new java.util.HashMap<>(metadata);
+            metadata.put(META_USER_ID, String.valueOf(row.getUserId()));
         }
         float[] vector = JSON.parseObject(row.getVectorJson(), float[].class);
         if (vector == null) {

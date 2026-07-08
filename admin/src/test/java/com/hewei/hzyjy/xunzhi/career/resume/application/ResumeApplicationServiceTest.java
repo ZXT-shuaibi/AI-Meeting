@@ -8,18 +8,18 @@ import com.hewei.hzyjy.xunzhi.career.memory.DecisionIndex;
 import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.InterviewRuleBasedScorer;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.ProjectBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mock.web.MockMultipartFile;
-
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -55,12 +55,12 @@ class ResumeApplicationServiceTest {
 
         CvOptimizationResult result = service.optimize(7L, 1L, "Java JD");
 
-        org.junit.jupiter.api.Assertions.assertEquals("low score draft", result.cv().getSummary());
+        assertEquals("low score draft", result.cv().getSummary());
         verify(store, never()).save(any());
     }
 
     @Test
-    void uploadRejectsOversizedResumeBeforeReadingBytes() throws Exception {
+    void uploadRejectsOversizedResumeBeforeReadingBytes() {
         ResumeStore store = mock(ResumeStore.class);
         ResumeRagService ragService = mock(ResumeRagService.class);
         CvOptimizationOrchestrator orchestrator = mock(CvOptimizationOrchestrator.class);
@@ -76,7 +76,6 @@ class ResumeApplicationServiceTest {
 
         verify(store, never()).save(any());
     }
-
 
     @Test
     void uploadParsesBoundedDocxContent() throws Exception {
@@ -99,7 +98,45 @@ class ResumeApplicationServiceTest {
         verify(store).save(any());
     }
 
+    @Test
+    void uploadUsesStructuredResumeParserBeforeHeuristicFallback() {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        CvBO structured = CvBO.builder()
+                .name("candidate-structured")
+                .title("Java Backend Engineer")
+                .summary("Three years of Spring AI and LangChain4j project experience")
+                .skills(List.of(SkillBO.builder().name("LangChain4j").level("experienced").build()))
+                .projects(List.of(ProjectBO.builder().name("AI Interview Platform").role("Backend Owner").description("RAG and multi-agent loop").build()))
+                .build();
+        ResumeStructuringService structuringService = (userId, filename, text) -> structured;
+        when(store.save(any())).thenAnswer(invocation -> ((CvBO) invocation.getArgument(0)).toBuilder().id(12L).build());
+        when(store.findByIdAndUserId(12L, 7L)).thenAnswer(invocation -> Optional.of(structured.toBuilder().id(12L).userId(7L).build()));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+        ResumeApplicationService service = service(store, ragService, mock(CvOptimizationOrchestrator.class), structuringService);
+        MockMultipartFile file = new MockMultipartFile(
+                "resume",
+                "resume.txt",
+                "text/plain",
+                "Java Spring AI LangChain4j RAG multi-agent".getBytes(StandardCharsets.UTF_8)
+        );
+
+        ResumeUploadResult result = service.upload(7L, file);
+
+        assertEquals("candidate-structured", result.cv().getName());
+        assertEquals("AI Interview Platform", result.cv().getProjects().get(0).getName());
+        assertEquals("LangChain4j", result.cv().getSkills().get(0).getName());
+    }
+
     private ResumeApplicationService service(ResumeStore store, ResumeRagService ragService, CvOptimizationOrchestrator orchestrator) {
+        return service(store, ragService, orchestrator, (userId, filename, text) -> null);
+    }
+
+    private ResumeApplicationService service(
+            ResumeStore store,
+            ResumeRagService ragService,
+            CvOptimizationOrchestrator orchestrator,
+            ResumeStructuringService structuringService) {
         return new ResumeApplicationService(
                 store,
                 mock(JobMatchTaskStore.class),
@@ -108,10 +145,10 @@ class ResumeApplicationServiceTest {
                 mock(InterviewPlanningService.class),
                 mock(CareerInterviewExecutionBridge.class),
                 new HybridCompactingChatMemory(request -> null, new InterviewRuleBasedScorer(), new DecisionIndex()),
+                structuringService,
                 emptyProvider()
         );
     }
-
 
     private byte[] minimalDocx(String text) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();

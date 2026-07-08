@@ -63,6 +63,7 @@ public class ResumeApplicationService {
     private final InterviewPlanningService interviewPlanningService;
     private final CareerInterviewExecutionBridge interviewExecutionBridge;
     private final HybridCompactingChatMemory chatMemory;
+    private final ResumeStructuringService resumeStructuringService;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
@@ -244,6 +245,15 @@ public class ResumeApplicationService {
             throw new IllegalArgumentException("Resume parse failed: no text content extracted");
         }
         String summary = limitResumeText(content.trim());
+        CvBO structured = resumeStructuringService == null ? null : resumeStructuringService.structure(userId, originalFilename, summary);
+        if (structured != null) {
+            return structured.toBuilder()
+                    .userId(userId)
+                    .cvType(StringUtils.hasText(structured.getCvType()) ? structured.getCvType() : "upload")
+                    .name(StringUtils.hasText(structured.getName()) ? structured.getName() : (originalFilename == null ? "uploaded-resume" : originalFilename))
+                    .summary(StringUtils.hasText(structured.getSummary()) ? structured.getSummary() : summary)
+                    .build();
+        }
         return CvBO.builder()
                 .userId(userId)
                 .cvType("upload")

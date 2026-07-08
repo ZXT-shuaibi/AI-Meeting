@@ -15,6 +15,7 @@ public class CareerResumeChunkDO extends BaseDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long resumeId;
+    private Long userId;
     private String vectorId;
     private String chunkType;
     private Integer chunkIndex;

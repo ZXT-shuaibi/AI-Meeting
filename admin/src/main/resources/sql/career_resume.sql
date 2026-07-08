@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS `career_resume` (
 CREATE TABLE IF NOT EXISTS `career_resume_chunk` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
   `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `user_id` bigint DEFAULT NULL COMMENT 'User id',
   `vector_id` varchar(64) DEFAULT NULL COMMENT 'External vector id',
   `chunk_type` varchar(32) NOT NULL COMMENT 'overview/summary/skills/experience/project/education',
   `chunk_index` int DEFAULT 0 COMMENT 'Chunk index',
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS `career_resume_chunk` (
   `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `del_flag` tinyint DEFAULT 0,
   PRIMARY KEY (`id`),
+  KEY `idx_user_resume_type` (`user_id`, `resume_id`, `chunk_type`),
   KEY `idx_resume_type` (`resume_id`, `chunk_type`),
   KEY `idx_vector_id` (`vector_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume RAG chunks';
