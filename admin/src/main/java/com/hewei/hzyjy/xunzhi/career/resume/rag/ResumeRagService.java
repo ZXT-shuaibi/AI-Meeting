@@ -4,6 +4,8 @@ import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.ai.EmbeddingGateway;
 import com.hewei.hzyjy.xunzhi.career.config.CareerRagProperties;
+import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +16,7 @@ import org.springframework.util.DigestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -46,6 +49,7 @@ public class ResumeRagService {
     private final CareerRagProperties ragProperties;
     private final RerankGateway rerankGateway;
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
 
     public List<ResumeChunk> storeCvBO(CvBO cv) {
         List<ResumeChunk> chunks = resumeChunker.chunk(cv);
@@ -73,10 +77,16 @@ public class ResumeRagService {
             if (vectors != null && vectors.size() == chunks.size()) {
                 return vectors;
             }
-            log.warn("Embedding gateway returned mismatched vector count, storing text-only chunks for BM25 fallback. expected={}, actual={}",
+            String message = "Embedding gateway returned mismatched vector count";
+            log.warn("{}; storing text-only chunks for BM25 fallback. expected={}, actual={}",
+                    message,
                     chunks.size(), vectors == null ? 0 : vectors.size());
+            publishRagToolEvent("rag-embedding-store", "RESUME_ANALYSIS", "storeCvBO",
+                    "expected=" + chunks.size(), false, message, Map.of("expected", chunks.size(), "actual", vectors == null ? 0 : vectors.size()));
         } catch (Exception ex) {
             log.warn("Resume embedding failed during chunk storage, storing text-only chunks for BM25 fallback", ex);
+            publishRagToolEvent("rag-embedding-store", "RESUME_ANALYSIS", "storeCvBO",
+                    "chunks=" + chunks.size(), false, ex.getMessage(), Map.of("chunkCount", chunks.size()));
         }
         return chunks.stream().map(chunk -> new float[0]).toList();
     }
@@ -133,6 +143,8 @@ public class ResumeRagService {
             return result;
         } catch (Exception ex) {
             log.warn("HyDE generation failed, original query will be used", ex);
+            publishRagToolEvent("rag-hyde", "JD_ALIGNMENT", query,
+                    "fallback=original-query", false, ex.getMessage(), Map.of("queryDigest", digest(query)));
             return null;
         }
     }
@@ -160,6 +172,8 @@ public class ResumeRagService {
             return queries;
         } catch (Exception ex) {
             log.warn("Multi-query generation failed", ex);
+            publishRagToolEvent("rag-multi-query", "JD_ALIGNMENT", query,
+                    "fallback=empty", false, ex.getMessage(), Map.of("queryDigest", digest(query)));
             return List.of();
         }
     }
@@ -180,6 +194,8 @@ public class ResumeRagService {
                 );
             } catch (Exception ex) {
                 log.warn("Vector coarse recall failed, BM25 fine recall can still run. queryDigest={}", digest(query), ex);
+                publishRagToolEvent("rag-vector-coarse", "JD_ALIGNMENT", query,
+                        "fallback=bm25-fine", false, ex.getMessage(), Map.of("queryDigest", digest(query), "targetLimit", targetLimit));
                 continue;
             }
             for (ResumeVectorMatch match : matches) {
@@ -213,6 +229,8 @@ public class ResumeRagService {
                 }
             } catch (Exception ex) {
                 log.warn("Vector fine recall failed, continuing with independent BM25 lane. queryDigest={}", digest(query), ex);
+                publishRagToolEvent("rag-vector-fine", "JD_ALIGNMENT", query,
+                        "fallback=bm25", false, ex.getMessage(), Map.of("queryDigest", digest(query), "limit", limit));
             }
             List<RetrievedChunk> bm25Ranked = bm25Recall(query, candidateResumeIds, metadataFilters, limit);
             if (!bm25Ranked.isEmpty()) {
@@ -232,6 +250,8 @@ public class ResumeRagService {
             documents = vectorStore.findByResumeIds(candidateResumeIds);
         } catch (Exception ex) {
             log.warn("BM25 recall source lookup failed. queryDigest={}", digest(query), ex);
+            publishRagToolEvent("rag-bm25-source", "JD_ALIGNMENT", query,
+                    "fallback=empty", false, ex.getMessage(), Map.of("queryDigest", digest(query), "candidateCount", candidateResumeIds == null ? 0 : candidateResumeIds.size()));
             return List.of();
         }
         List<ResumeVectorDocument> filtered = documents.stream()
@@ -290,6 +310,8 @@ public class ResumeRagService {
             }
         } catch (Exception ex) {
             log.warn("External rerank failed, BM25 fallback will be used", ex);
+            publishRagToolEvent("rag-rerank", "JD_ALIGNMENT", query,
+                    "fallback=bm25", false, ex.getMessage(), Map.of("candidateCount", candidates.size(), "limit", limit));
         }
         Map<String, Double> bm25 = Bm25Scorer.score(candidates, query);
         return candidates.stream()
@@ -390,6 +412,42 @@ public class ResumeRagService {
         } catch (Exception ex) {
             log.debug("RAG cache write failed. key={}", key, ex);
         }
+    }
+
+    private void publishRagToolEvent(
+            String toolName,
+            String sceneCode,
+            String input,
+            String output,
+            boolean success,
+            String errorMessage,
+            Map<String, Object> metadata) {
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher == null) {
+            return;
+        }
+        tracePublisher.tool(new AiToolExecutionEvent(
+                UUID.randomUUID().toString(),
+                "resume-rag",
+                null,
+                sceneCode,
+                toolName,
+                abbreviate(input, 1000),
+                abbreviate(output, 2000),
+                success,
+                0,
+                0,
+                errorMessage,
+                Instant.now(),
+                metadata == null ? Map.of() : metadata
+        ));
+    }
+
+    private String abbreviate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max) + "...";
     }
 
     private String digest(String value) {

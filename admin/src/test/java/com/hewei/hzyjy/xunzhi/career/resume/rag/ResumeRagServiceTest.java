@@ -3,11 +3,15 @@ package com.hewei.hzyjy.xunzhi.career.resume.rag;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.ai.EmbeddingGateway;
 import com.hewei.hzyjy.xunzhi.career.config.CareerRagProperties;
+import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,7 +37,8 @@ class ResumeRagServiceTest {
                 request -> AiGatewayResult.builder().content("").provider("test").build(),
                 new CareerRagProperties(),
                 (query, candidates, limit) -> candidates.stream().limit(limit).toList(),
-                emptyProvider()
+                emptyProvider(),
+                emptyTraceProvider()
         );
 
         List<String> result = service.retrieveTemplates("Spring AI Redis Qdrant", 1, 7L, Set.of("101", "102"));
@@ -52,7 +57,8 @@ class ResumeRagServiceTest {
                 request -> AiGatewayResult.builder().content("").provider("test").build(),
                 new CareerRagProperties(),
                 (query, candidates, limit) -> candidates.stream().limit(limit).toList(),
-                emptyProvider()
+                emptyProvider(),
+                emptyTraceProvider()
         );
 
         List<String> result = service.retrieveTemplates("Spring AI Redis Qdrant", 1, 7L, Set.of("101", "102"));
@@ -86,7 +92,8 @@ class ResumeRagServiceTest {
                 request -> AiGatewayResult.builder().content("").provider("test").build(),
                 new CareerRagProperties(),
                 (query, candidates, limit) -> candidates.stream().limit(limit).toList(),
-                emptyProvider()
+                emptyProvider(),
+                emptyTraceProvider()
         );
 
         service.storeCvBO(CvBO.builder()
@@ -99,6 +106,41 @@ class ResumeRagServiceTest {
 
         assertFalse(store.findByResumeIds(Set.of("201")).isEmpty());
         assertFalse(result.isEmpty());
+    }
+
+    @Test
+    void publishesToolEventsForRagDegradationWhileReturningBm25Fallback() {
+        RecordingEventPublisher eventPublisher = new RecordingEventPublisher();
+        ResumeVectorDocument javaProject = javaProject();
+        ResumeRagService service = new ResumeRagService(
+                new ResumeChunker(),
+                new FailingEmbeddingGateway(),
+                new VectorMissStore(List.of(javaProject, unrelatedProject())),
+                request -> {
+                    throw new IllegalStateException("llm unavailable");
+                },
+                new CareerRagProperties(),
+                (query, candidates, limit) -> {
+                    throw new IllegalStateException("rerank unavailable");
+                },
+                emptyProvider(),
+                traceProvider(new AiTracePublisher(eventPublisher))
+        );
+
+        List<String> result = service.retrieveTemplates("Spring AI Redis Qdrant", 1, 7L, Set.of("101", "102"));
+
+        assertEquals(List.of(javaProject.text()), result);
+        List<String> failedTools = eventPublisher.toolEvents().stream()
+                .filter(event -> !event.success())
+                .map(AiToolExecutionEvent::toolName)
+                .toList();
+        assertEquals(List.of(
+                "rag-hyde",
+                "rag-multi-query",
+                "rag-vector-coarse",
+                "rag-vector-fine",
+                "rag-rerank"
+        ), failedTools);
     }
 
     private ResumeVectorDocument javaProject() {
@@ -193,5 +235,68 @@ class ResumeRagServiceTest {
                 return null;
             }
         };
+    }
+
+    private static ObjectProvider<AiTracePublisher> emptyTraceProvider() {
+        return new ObjectProvider<>() {
+            @Override
+            public AiTracePublisher getObject(Object... args) {
+                return null;
+            }
+
+            @Override
+            public AiTracePublisher getIfAvailable() {
+                return null;
+            }
+
+            @Override
+            public AiTracePublisher getIfUnique() {
+                return null;
+            }
+
+            @Override
+            public AiTracePublisher getObject() {
+                return null;
+            }
+        };
+    }
+
+    private static ObjectProvider<AiTracePublisher> traceProvider(AiTracePublisher publisher) {
+        return new ObjectProvider<>() {
+            @Override
+            public AiTracePublisher getObject(Object... args) {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getIfAvailable() {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getIfUnique() {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getObject() {
+                return publisher;
+            }
+        };
+    }
+
+    private static class RecordingEventPublisher implements ApplicationEventPublisher {
+        private final List<AiToolExecutionEvent> toolEvents = new ArrayList<>();
+
+        @Override
+        public void publishEvent(Object event) {
+            if (event instanceof AiToolExecutionEvent toolEvent) {
+                toolEvents.add(toolEvent);
+            }
+        }
+
+        List<AiToolExecutionEvent> toolEvents() {
+            return toolEvents;
+        }
     }
 }
