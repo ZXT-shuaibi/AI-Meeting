@@ -1,32 +1,68 @@
-﻿package com.hewei.hzyjy.xunzhi.career.agent.cv;
+package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
 import com.hewei.hzyjy.xunzhi.career.agent.support.AgentResponseParser;
+import com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 
+@Slf4j
 @Primary
 @Component
-@RequiredArgsConstructor
 public class AiCvReviewer implements CvReviewer {
 
     private final AiGateway aiGateway;
+    private final ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider;
+
+    @Autowired
+    public AiCvReviewer(AiGateway aiGateway, ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider) {
+        this.aiGateway = aiGateway;
+        this.agentRuntimeGatewayProvider = agentRuntimeGatewayProvider;
+    }
+
+    public AiCvReviewer(AiGateway aiGateway) {
+        this.aiGateway = aiGateway;
+        this.agentRuntimeGatewayProvider = null;
+    }
 
     @Override
     public CvReview review(CvBO cv, String jobDescription, List<String> referenceTemplates) {
-        String response = aiGateway.chat(AiPromptRequest.builder()
-                .sceneCode("RESUME_REVIEW")
-                .systemPrompt("Review the resume against the JD. Return JSON: {\"score\":0.0-1.0,\"feedback\":\"concise diagnosis and rewrite advice\"}.")
-                .userPrompt("JD:\n" + jobDescription + "\n\nCV:\n" + cv + "\n\nReference templates:\n" + referenceTemplates)
-                .build()).content();
+        String response = tryLangChain4j(cv, jobDescription, referenceTemplates);
+        if (response == null || response.isBlank()) {
+            response = aiGateway.chat(AiPromptRequest.builder()
+                    .sceneCode("RESUME_REVIEW")
+                    .systemPrompt("Review the resume against the JD. Return JSON: {\"score\":0.0-1.0,\"feedback\":\"concise diagnosis and rewrite advice\"}.")
+                    .userPrompt("JD:\n" + jobDescription + "\n\nCV:\n" + cv + "\n\nReference templates:\n" + referenceTemplates)
+                    .build()).content();
+        }
         double score = AgentResponseParser.score(response).orElseGet(() -> heuristicScore(cv, jobDescription));
         String feedback = AgentResponseParser.feedback(response).orElse(response);
         return new CvReview(score, feedback);
+    }
+
+    private String tryLangChain4j(CvBO cv, String jobDescription, List<String> referenceTemplates) {
+        AgentRuntimeGateway gateway = agentRuntimeGatewayProvider == null ? null : agentRuntimeGatewayProvider.getIfAvailable();
+        if (gateway == null) {
+            return null;
+        }
+        try {
+            return gateway.invoke("CvReviewer", "review", Map.of(
+                    "cv", cv,
+                    "jobDescription", jobDescription,
+                    "referenceTemplates", referenceTemplates == null ? List.of() : referenceTemplates
+            ), String.class);
+        } catch (Exception ex) {
+            log.debug("LangChain4j CvReviewer unavailable, falling back to Spring AI", ex);
+            return null;
+        }
     }
 
     private double heuristicScore(CvBO cv, String jobDescription) {

@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.rag;
+package com.hewei.hzyjy.xunzhi.career.resume.rag;
 
 import java.util.List;
 

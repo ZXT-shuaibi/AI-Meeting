@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.api;
+package com.hewei.hzyjy.xunzhi.career.api;
 
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlan;
@@ -47,45 +47,62 @@ public class ResumeCareerController {
     }
 
     @PostMapping("/resumes/{resumeId}/embedding")
-    public Result<ResumeEmbeddingResult> embedding(@PathVariable Long resumeId) {
-        return Results.success(resumeApplicationService.embedding(resumeId));
+    public Result<ResumeEmbeddingResult> embedding(
+            @PathVariable Long resumeId,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.embedding(currentUser.getUserId(), resumeId));
     }
 
     @PostMapping("/jobs/match-resumes")
-    public Result<JobMatchTaskResult> matchResumes(@Valid @RequestBody JobMatchReqDTO requestParam) {
+    public Result<JobMatchTaskResult> matchResumes(
+            @Valid @RequestBody JobMatchReqDTO requestParam,
+            @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.matchResumes(
+                currentUser.getUserId(),
                 requestParam.getJobDescription(),
                 requestParam.getLimit() == null ? 3 : requestParam.getLimit()
         ));
     }
 
     @GetMapping("/jobs/match-tasks/{taskId}")
-    public Result<JobMatchTaskResult> getMatchTask(@PathVariable String taskId) {
-        return Results.success(resumeApplicationService.getMatchTask(taskId));
+    public Result<JobMatchTaskResult> getMatchTask(
+            @PathVariable String taskId,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.getMatchTask(currentUser.getUserId(), taskId));
     }
 
     @PostMapping("/resumes/{resumeId}/optimize")
     public Result<CvOptimizationResult> optimize(
             @PathVariable Long resumeId,
-            @Valid @RequestBody ResumeOptimizeReqDTO requestParam) {
-        return Results.success(resumeApplicationService.optimize(resumeId, requestParam.getJobDescription()));
+            @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription()));
     }
 
     @PostMapping(value = "/resumes/{resumeId}/optimize/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter optimizeStream(
             @PathVariable Long resumeId,
-            @Valid @RequestBody ResumeOptimizeReqDTO requestParam) throws IOException {
+            @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
+            @CurrentUser UserContext currentUser) throws IOException {
         SseEmitter emitter = new SseEmitter(120000L);
         emitter.send(SseEmitter.event().name("START").data("resume optimization started"));
-        CvOptimizationResult result = resumeApplicationService.optimize(resumeId, requestParam.getJobDescription());
+        CvOptimizationResult result = resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription());
+        if (result.reviewHistory() != null) {
+            for (int i = 0; i < result.reviewHistory().size(); i++) {
+                emitter.send(SseEmitter.event().name("ITERATION").data(result.reviewHistory().get(i)));
+            }
+        }
         emitter.send(SseEmitter.event().name("COMPLETE").data(result));
         emitter.complete();
         return emitter;
     }
 
     @PostMapping("/interview/plans")
-    public Result<InterviewPlan> planInterview(@Valid @RequestBody InterviewPlanReqDTO requestParam) {
+    public Result<InterviewPlan> planInterview(
+            @Valid @RequestBody InterviewPlanReqDTO requestParam,
+            @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.planInterview(
+                currentUser.getUserId(),
                 requestParam.getSessionId(),
                 requestParam.getResumeId(),
                 requestParam.getJobDescription()
@@ -93,8 +110,11 @@ public class ResumeCareerController {
     }
 
     @PostMapping("/interview/reflections")
-    public Result<ReflectionResult> reflect(@Valid @RequestBody InterviewReflectReqDTO requestParam) {
+    public Result<ReflectionResult> reflect(
+            @Valid @RequestBody InterviewReflectReqDTO requestParam,
+            @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.reflect(
+                currentUser.getUserId(),
                 requestParam.getSessionId(),
                 requestParam.getResumeId(),
                 requestParam.getCurrentQuestion(),

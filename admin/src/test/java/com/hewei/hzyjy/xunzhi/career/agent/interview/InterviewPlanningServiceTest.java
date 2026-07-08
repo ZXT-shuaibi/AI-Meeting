@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.agent.interview;
+package com.hewei.hzyjy.xunzhi.career.agent.interview;
 
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;

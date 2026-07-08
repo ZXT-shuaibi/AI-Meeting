@@ -33,7 +33,7 @@ class CvOptimizationOrchestratorTest {
     }
 
     @Test
-    void stopsAtMaxIterationsAndReturnsLatestUsableCvWhenGateNotMet() {
+    void stopsAtMaxIterationsAndReturnsLatestReviewedCvWhenGateNotMet() {
         CvBO original = CvBO.builder().name("candidate").summary("java backend").build();
         AtomicInteger tailorCalls = new AtomicInteger();
         CvReviewer reviewer = (cv, jd, templates) -> new CvReview(0.6, "keep improving");
@@ -46,7 +46,8 @@ class CvOptimizationOrchestratorTest {
         CvOptimizationResult result = orchestrator.optimize(original, "Java JD", List.of(), 3);
 
         assertEquals(3, result.iterations());
-        assertEquals("round-3", result.cv().getSummary());
+        assertEquals("round-2", result.cv().getSummary());
+        assertEquals(2, tailorCalls.get());
     }
 
     @Test

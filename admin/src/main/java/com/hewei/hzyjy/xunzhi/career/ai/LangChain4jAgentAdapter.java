@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.ai;
+package com.hewei.hzyjy.xunzhi.career.ai;
 
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -70,12 +71,46 @@ public class LangChain4jAgentAdapter implements AgentRuntimeGateway {
         if (method.getParameterCount() == 0) {
             return new Object[0];
         }
+        Object[] ordered = buildKnownArguments(method, variables);
+        if (ordered != null) {
+            return ordered;
+        }
         Object[] args = new Object[method.getParameterCount()];
         Parameter[] parameters = method.getParameters();
         for (int i = 0; i < parameters.length; i++) {
             args[i] = resolveArgument(parameters[i], variables);
         }
         return args;
+    }
+
+    private Object[] buildKnownArguments(Method method, Map<String, Object> variables) {
+        if (variables == null || variables.isEmpty()) {
+            return null;
+        }
+        List<String> keys = knownArgumentKeys(method.getName());
+        if (keys.isEmpty() || keys.size() != method.getParameterCount()) {
+            return null;
+        }
+        Object[] args = new Object[keys.size()];
+        for (int i = 0; i < keys.size(); i++) {
+            if (!variables.containsKey(keys.get(i))) {
+                return null;
+            }
+            args[i] = variables.get(keys.get(i));
+        }
+        return args;
+    }
+
+    private List<String> knownArgumentKeys(String methodName) {
+        return switch (methodName) {
+            case "review" -> List.of("cv", "jobDescription", "referenceTemplates");
+            case "tailor" -> List.of("cv", "review", "referenceTemplates");
+            case "align" -> List.of("memoryId", "cv", "jobDescription");
+            case "coordinate" -> List.of("memoryId", "alignment");
+            case "plan" -> List.of("sessionId", "cv", "jobDescription", "alignment", "stages", "firstQuestion");
+            case "reflect" -> List.of("memoryId", "currentQuestion", "userAnswer", "cv", "memoryView");
+            default -> List.of();
+        };
     }
 
     private Object resolveArgument(Parameter parameter, Map<String, Object> variables) {

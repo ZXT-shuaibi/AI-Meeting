@@ -3,6 +3,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -25,5 +26,24 @@ public class InMemoryResumeStore implements ResumeStore {
     @Override
     public Optional<CvBO> findById(Long resumeId) {
         return Optional.ofNullable(resumes.get(resumeId));
+    }
+
+    @Override
+    public Optional<CvBO> findByIdAndUserId(Long resumeId, Long userId) {
+        if (resumeId == null || userId == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(resumes.get(resumeId))
+                .filter(cv -> userId.equals(cv.getUserId()));
+    }
+
+    @Override
+    public List<CvBO> findByUserId(Long userId) {
+        if (userId == null) {
+            return List.of();
+        }
+        return resumes.values().stream()
+                .filter(cv -> userId.equals(cv.getUserId()))
+                .toList();
     }
 }

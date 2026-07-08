@@ -4,6 +4,9 @@ import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 
 public record ResumeUploadResult(
         Long resumeId,
-        CvBO cv
+        CvBO cv,
+        String embeddingStatus,
+        int chunkCount,
+        String errorMessage
 ) {
 }

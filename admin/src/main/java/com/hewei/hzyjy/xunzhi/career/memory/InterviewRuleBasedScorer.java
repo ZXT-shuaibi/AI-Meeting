@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.memory;
+package com.hewei.hzyjy.xunzhi.career.memory;
 
 import org.springframework.stereotype.Component;
 

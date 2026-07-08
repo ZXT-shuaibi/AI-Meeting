@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.agent.support;
+package com.hewei.hzyjy.xunzhi.career.agent.support;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;

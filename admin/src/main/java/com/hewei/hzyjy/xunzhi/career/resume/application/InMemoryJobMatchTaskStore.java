@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.application;
+package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import org.springframework.stereotype.Component;
 
@@ -20,5 +20,14 @@ public class InMemoryJobMatchTaskStore implements JobMatchTaskStore {
     @Override
     public Optional<JobMatchTaskResult> findByTaskId(String taskId) {
         return Optional.ofNullable(tasks.get(taskId));
+    }
+
+    @Override
+    public Optional<JobMatchTaskResult> findByTaskIdAndUserId(String taskId, Long userId) {
+        if (taskId == null || userId == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(tasks.get(taskId))
+                .filter(task -> userId.equals(task.userId()));
     }
 }

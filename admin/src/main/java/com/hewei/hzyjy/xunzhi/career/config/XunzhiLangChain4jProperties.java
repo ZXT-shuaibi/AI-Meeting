@@ -21,11 +21,14 @@ public class XunzhiLangChain4jProperties {
 
     @Data
     public static class Qdrant {
+        private boolean enabled = false;
         private String collectionName = "xunzhi_resume";
         private String host = "localhost";
-        private int port = 6334;
+        private int port = 6333;
         private boolean useTls = false;
+        private String apiKey = "";
         private String payloadTextKey = "content";
         private int vectorSize = 1024;
+        private int timeoutMillis = 3000;
     }
 }

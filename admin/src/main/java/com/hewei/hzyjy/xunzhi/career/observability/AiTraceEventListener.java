@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.observability;
+package com.hewei.hzyjy.xunzhi.career.observability;
 
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;

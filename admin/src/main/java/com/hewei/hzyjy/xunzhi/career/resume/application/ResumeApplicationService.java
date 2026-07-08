@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.application;
+package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
@@ -8,24 +8,41 @@ import com.hewei.hzyjy.xunzhi.career.agent.interview.ReflectionResult;
 import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.MemoryMessage;
 import com.hewei.hzyjy.xunzhi.career.memory.MemoryRole;
+import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ResumeApplicationService {
+
+    private static final Pattern XML_TAG = Pattern.compile("<[^>]+>");
+    private static final Set<String> TEXT_EXTENSIONS = Set.of("txt", "md", "markdown", "json", "csv", "log");
 
     private final ResumeStore resumeStore;
     private final JobMatchTaskStore jobMatchTaskStore;
@@ -33,110 +50,178 @@ public class ResumeApplicationService {
     private final CvOptimizationOrchestrator cvOptimizationOrchestrator;
     private final InterviewPlanningService interviewPlanningService;
     private final HybridCompactingChatMemory chatMemory;
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
+    private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
     public ResumeUploadResult upload(Long userId, MultipartFile file) {
-        CvBO parsed = parseUpload(userId, file);
-        CvBO saved = resumeStore.save(parsed);
-        chatMemory.add(memoryId(saved.getId()), MemoryMessage.builder()
-                .role(MemoryRole.USER)
-                .content("Resume uploaded and parsed: " + saved.getName() + " / " + saved.getTitle())
-                .metadata(Map.of("scene", "RESUME_ANALYSIS", "resumeId", String.valueOf(saved.getId())))
-                .build());
-        return new ResumeUploadResult(saved.getId(), saved);
+        long start = System.currentTimeMillis();
+        String traceId = UUID.randomUUID().toString();
+        try {
+            CvBO parsed = parseUpload(userId, file);
+            CvBO saved = resumeStore.save(parsed);
+            chatMemory.add(memoryId(saved.getId()), MemoryMessage.builder()
+                    .role(MemoryRole.USER)
+                    .content("Resume uploaded and parsed: " + saved.getName() + " / " + saved.getTitle())
+                    .metadata(Map.of("scene", "RESUME_ANALYSIS", "resumeId", String.valueOf(saved.getId()), "userId", String.valueOf(userId)))
+                    .build());
+            ResumeEmbeddingResult embedding = embeddingOwned(userId, saved.getId(), false);
+            publishTool(traceId, "resume:" + saved.getId(), "RESUME_ANALYSIS", "resume-upload", saved.getName(),
+                    "embeddingStatus=" + embedding.status() + ", chunkCount=" + embedding.chunkCount(),
+                    embedding.errorMessage() == null, start, embedding.errorMessage(), Map.of("userId", userId, "resumeId", saved.getId()));
+            return new ResumeUploadResult(saved.getId(), saved, embedding.status(), embedding.chunkCount(), embedding.errorMessage());
+        } catch (Exception ex) {
+            publishTool(traceId, "resume:upload", "RESUME_ANALYSIS", "resume-upload", safeFilename(file), "FAILED", false, start, ex.getMessage(), Map.of("userId", userId));
+            if (ex instanceof IllegalArgumentException illegalArgumentException) {
+                throw illegalArgumentException;
+            }
+            throw new IllegalArgumentException("Resume upload failed: " + ex.getMessage(), ex);
+        }
     }
 
-    public ResumeEmbeddingResult embedding(Long resumeId) {
-        CvBO cv = getResume(resumeId);
-        List<ResumeChunk> chunks = resumeRagService.storeCvBO(cv);
-        chatMemory.add(memoryId(resumeId), MemoryMessage.builder()
-                .role(MemoryRole.TOOL)
-                .content("Resume embedding completed. chunkCount=" + chunks.size())
-                .metadata(Map.of("scene", "RESUME_ANALYSIS", "resumeId", String.valueOf(resumeId)))
-                .build());
-        return new ResumeEmbeddingResult(resumeId, chunks.size(), chunks);
+    public ResumeEmbeddingResult embedding(Long userId, Long resumeId) {
+        return embeddingOwned(userId, resumeId, true);
     }
 
-    public JobMatchTaskResult matchResumes(String jobDescription, int limit) {
+    public JobMatchTaskResult matchResumes(Long userId, String jobDescription, int limit) {
         String taskId = UUID.randomUUID().toString();
         int boundedLimit = limit <= 0 ? 3 : limit;
-        JobMatchTaskResult started = new JobMatchTaskResult(taskId, "STARTED", List.of(), null);
+        JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId);
         jobMatchTaskStore.save(started, jobDescription, boundedLimit, null);
+        long start = System.currentTimeMillis();
         try {
-            List<String> templates = resumeRagService.retrieveTemplates(jobDescription, boundedLimit);
-            JobMatchTaskResult completed = new JobMatchTaskResult(taskId, "COMPLETED", templates, null);
+            Set<String> resumeIds = ensureUserResumeEmbeddings(userId);
+            List<String> templates = resumeRagService.retrieveTemplates(jobDescription, boundedLimit, userId, resumeIds);
+            JobMatchTaskResult completed = JobMatchTaskResult.completed(taskId, userId, templates);
+            publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
+                    "matched=" + templates.size(), true, start, null, Map.of("userId", userId, "resumeScope", resumeIds.size()));
             return jobMatchTaskStore.save(completed, jobDescription, boundedLimit, null);
         } catch (Exception ex) {
             log.warn("Career job match task failed. taskId={}", taskId, ex);
-            JobMatchTaskResult failed = new JobMatchTaskResult(taskId, "FAILED", List.of(), ex.getMessage());
+            JobMatchTaskResult failed = JobMatchTaskResult.failed(taskId, userId, ex.getMessage());
+            publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
+                    "FAILED", false, start, ex.getMessage(), Map.of("userId", userId));
             return jobMatchTaskStore.save(failed, jobDescription, boundedLimit, ex.getMessage());
         }
     }
 
-    public JobMatchTaskResult getMatchTask(String taskId) {
-        return jobMatchTaskStore.findByTaskId(taskId).orElseGet(() -> JobMatchTaskResult.notFound(taskId));
+    public JobMatchTaskResult getMatchTask(Long userId, String taskId) {
+        return jobMatchTaskStore.findByTaskIdAndUserId(taskId, userId).orElseGet(() -> JobMatchTaskResult.notFound(taskId));
     }
 
-    public CvOptimizationResult optimize(Long resumeId, String jobDescription) {
-        CvBO cv = getResume(resumeId);
-        List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3);
+    public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription) {
+        CvBO cv = getResume(userId, resumeId);
+        ensureResumeEmbedding(cv);
+        List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)));
         CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, 3);
-        resumeStore.save(result.cv());
+        CvBO optimized = result.cv().toBuilder().id(resumeId).userId(userId).build();
+        resumeStore.save(optimized);
+        ensureResumeEmbedding(optimized);
         chatMemory.add(memoryId(resumeId), MemoryMessage.builder()
                 .role(MemoryRole.ASSISTANT)
                 .content("Resume optimization decision: scoreGatePassed=" + result.scoreGatePassed()
                         + ", iterations=" + result.iterations()
                         + ", bestReview=" + result.bestReview())
-                .metadata(Map.of("scene", "RESUME_TAILOR", "resumeId", String.valueOf(resumeId)))
+                .metadata(Map.of("scene", "RESUME_TAILOR", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
-        return result;
+        return CvOptimizationResult.builder()
+                .cv(optimized)
+                .bestReview(result.bestReview())
+                .iterations(result.iterations())
+                .scoreGatePassed(result.scoreGatePassed())
+                .failureReason(result.failureReason())
+                .reviewHistory(result.reviewHistory())
+                .build();
     }
 
-    public InterviewPlan planInterview(String sessionId, Long resumeId, String jobDescription) {
-        InterviewPlan plan = interviewPlanningService.plan(sessionId, getResume(resumeId), jobDescription);
-        chatMemory.add(memoryId(sessionId, resumeId), MemoryMessage.builder()
+    public InterviewPlan planInterview(Long userId, String sessionId, Long resumeId, String jobDescription) {
+        String memoryId = memoryId(userId, sessionId, resumeId);
+        InterviewPlan plan = interviewPlanningService.plan(memoryId, sessionId, getResume(userId, resumeId), jobDescription);
+        chatMemory.add(memoryId, MemoryMessage.builder()
                 .role(MemoryRole.ASSISTANT)
                 .content("Interview plan generated. firstQuestion=" + plan.firstQuestion() + ", alignment=" + plan.alignment())
-                .metadata(Map.of("scene", "INTERVIEW_COORDINATION", "resumeId", String.valueOf(resumeId)))
+                .metadata(Map.of("scene", "INTERVIEW_COORDINATION", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
         return plan;
     }
 
-    public ReflectionResult reflect(String sessionId, Long resumeId, String currentQuestion, String userAnswer) {
-        String memoryId = memoryId(sessionId, resumeId);
+    public ReflectionResult reflect(Long userId, String sessionId, Long resumeId, String currentQuestion, String userAnswer) {
+        CvBO cv = getResume(userId, resumeId);
+        String memoryId = memoryId(userId, sessionId, resumeId);
         chatMemory.add(memoryId, MemoryMessage.builder()
                 .role(MemoryRole.USER)
                 .content("Question: " + currentQuestion + "\nAnswer: " + userAnswer)
-                .metadata(Map.of("scene", "INTERVIEW_REFLECTION", "resumeId", String.valueOf(resumeId)))
+                .metadata(Map.of("scene", "INTERVIEW_REFLECTION", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
-        ReflectionResult result = interviewPlanningService.reflect(memoryId, currentQuestion, userAnswer, getResume(resumeId));
+        ReflectionResult result = interviewPlanningService.reflect(memoryId, currentQuestion, userAnswer, cv);
         chatMemory.add(memoryId, MemoryMessage.builder()
                 .role(MemoryRole.ASSISTANT)
                 .content("Reflect decision: " + result.decision() + ", score=" + result.score() + ", feedback=" + result.feedback())
-                .metadata(Map.of("scene", "INTERVIEW_REFLECTION", "resumeId", String.valueOf(resumeId)))
+                .metadata(Map.of("scene", "INTERVIEW_REFLECTION", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
         return result;
     }
 
-    public ReflectionResult reflect(Long resumeId, String currentQuestion, String userAnswer) {
-        return reflect(null, resumeId, currentQuestion, userAnswer);
+
+    private ResumeEmbeddingResult embeddingOwned(Long userId, Long resumeId, boolean failOnError) {
+        CvBO cv = getResume(userId, resumeId);
+        return doEmbedding(cv, failOnError);
     }
 
-    private CvBO getResume(Long resumeId) {
-        return resumeStore.findById(resumeId)
-                .orElseThrow(() -> new IllegalArgumentException("Resume not found: " + resumeId));
+    private ResumeEmbeddingResult doEmbedding(CvBO cv, boolean failOnError) {
+        long start = System.currentTimeMillis();
+        String traceId = UUID.randomUUID().toString();
+        try {
+            List<ResumeChunk> chunks = resumeRagService.storeCvBO(cv);
+            embeddedResumeIds.put(cv.getId(), true);
+            chatMemory.add(memoryId(cv.getId()), MemoryMessage.builder()
+                    .role(MemoryRole.TOOL)
+                    .content("Resume embedding completed. chunkCount=" + chunks.size())
+                    .metadata(Map.of("scene", "RESUME_ANALYSIS", "resumeId", String.valueOf(cv.getId()), "userId", String.valueOf(cv.getUserId())))
+                    .build());
+            publishTool(traceId, memoryId(cv.getId()), "RESUME_ANALYSIS", "resume-embedding", cv.getName(),
+                    "chunkCount=" + chunks.size(), true, start, null, Map.of("resumeId", cv.getId(), "userId", cv.getUserId()));
+            return ResumeEmbeddingResult.completed(cv.getId(), chunks);
+        } catch (Exception ex) {
+            log.warn("Resume embedding failed. resumeId={}", cv.getId(), ex);
+            publishTool(traceId, memoryId(cv.getId()), "RESUME_ANALYSIS", "resume-embedding", cv.getName(),
+                    "FAILED", false, start, ex.getMessage(), Map.of("resumeId", cv.getId(), "userId", cv.getUserId()));
+            if (failOnError) {
+                throw new IllegalStateException("Resume embedding failed: " + ex.getMessage(), ex);
+            }
+            return ResumeEmbeddingResult.failed(cv.getId(), ex.getMessage());
+        }
+    }
+
+    private Set<String> ensureUserResumeEmbeddings(Long userId) {
+        List<CvBO> resumes = resumeStore.findByUserId(userId);
+        resumes.forEach(this::ensureResumeEmbedding);
+        return resumes.stream()
+                .map(CvBO::getId)
+                .filter(id -> id != null)
+                .map(String::valueOf)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    private void ensureResumeEmbedding(CvBO cv) {
+        if (cv == null || cv.getId() == null || Boolean.TRUE.equals(embeddedResumeIds.get(cv.getId()))) {
+            return;
+        }
+        doEmbedding(cv, false);
+    }
+
+    private CvBO getResume(Long userId, Long resumeId) {
+        return resumeStore.findByIdAndUserId(resumeId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Resume not found or not owned by current user: " + resumeId));
     }
 
     private CvBO parseUpload(Long userId, MultipartFile file) {
-        String originalFilename = file == null ? null : file.getOriginalFilename();
-        String content = "";
-        try {
-            if (file != null) {
-                content = new String(file.getBytes(), StandardCharsets.UTF_8);
-            }
-        } catch (Exception ignored) {
-            content = originalFilename == null ? "" : originalFilename;
+        validateUpload(file);
+        String originalFilename = file.getOriginalFilename();
+        String content = extractText(file);
+        if (!StringUtils.hasText(content)) {
+            throw new IllegalArgumentException("Resume parse failed: no text content extracted");
         }
-        String summary = content.isBlank() ? "Uploaded resume: " + originalFilename : content;
+        String summary = content.trim();
         return CvBO.builder()
                 .userId(userId)
                 .cvType("upload")
@@ -145,6 +230,56 @@ public class ResumeApplicationService {
                 .summary(summary)
                 .skills(inferSkills(summary))
                 .build();
+    }
+
+    private void validateUpload(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Resume file is empty");
+        }
+        String filename = safeFilename(file);
+        String ext = extension(filename);
+        if ("pdf".equals(ext)) {
+            throw new IllegalArgumentException("PDF resume parsing requires OCR/PDF text extractor integration; upload TXT/MD/DOCX for this endpoint or wire a PDF extractor first");
+        }
+        if (!(TEXT_EXTENSIONS.contains(ext) || "docx".equals(ext))) {
+            throw new IllegalArgumentException("Unsupported resume file type: " + ext + ". Supported: txt, md, json, csv, docx");
+        }
+    }
+
+    private String extractText(MultipartFile file) {
+        try {
+            String ext = extension(safeFilename(file));
+            byte[] bytes = file.getBytes();
+            if ("docx".equals(ext)) {
+                return extractDocxText(bytes);
+            }
+            return decodeUtf8(bytes);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Resume parse failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    private String extractDocxText(byte[] bytes) throws Exception {
+        StringBuilder text = new StringBuilder();
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if ("word/document.xml".equals(entry.getName())) {
+                    String xml = new String(zip.readAllBytes(), StandardCharsets.UTF_8);
+                    String normalized = xml.replace("</w:p>", "\n").replace("</w:tr>", "\n");
+                    text.append(XML_TAG.matcher(normalized).replaceAll(" "));
+                    break;
+                }
+            }
+        }
+        return text.toString().replaceAll("\\s+", " ").trim();
+    }
+
+    private String decodeUtf8(byte[] bytes) throws Exception {
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        return decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString();
     }
 
     private String inferTitle(String content) {
@@ -166,14 +301,67 @@ public class ResumeApplicationService {
                 .toList();
     }
 
+    private void publishTool(
+            String traceId,
+            String sessionId,
+            String sceneCode,
+            String toolName,
+            String input,
+            String output,
+            boolean success,
+            long startMillis,
+            String errorMessage,
+            Map<String, Object> metadata) {
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher == null) {
+            return;
+        }
+        tracePublisher.tool(new AiToolExecutionEvent(
+                traceId,
+                sessionId,
+                null,
+                sceneCode,
+                toolName,
+                abbreviate(input, 1000),
+                abbreviate(output, 2000),
+                success,
+                Math.max(0, System.currentTimeMillis() - startMillis),
+                0,
+                errorMessage,
+                Instant.now(),
+                metadata == null ? Map.of() : metadata
+        ));
+    }
+
     private String memoryId(Long resumeId) {
         return "resume:" + resumeId;
     }
 
-    private String memoryId(String sessionId, Long resumeId) {
+    private String memoryId(Long userId, String sessionId, Long resumeId) {
+        String owner = userId == null ? "anonymous" : String.valueOf(userId);
         if (sessionId != null && !sessionId.isBlank()) {
-            return "interview:" + sessionId;
+            return "interview:" + owner + ":" + sessionId;
         }
-        return memoryId(resumeId);
+        return "resume:" + owner + ":" + resumeId;
+    }
+
+    private String safeFilename(MultipartFile file) {
+        String name = file == null ? null : file.getOriginalFilename();
+        return StringUtils.hasText(name) ? name : "uploaded-resume";
+    }
+
+    private String extension(String filename) {
+        if (filename == null) {
+            return "";
+        }
+        int dot = filename.lastIndexOf('.');
+        return dot < 0 ? "" : filename.substring(dot + 1).toLowerCase();
+    }
+
+    private String abbreviate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max) + "...";
     }
 }

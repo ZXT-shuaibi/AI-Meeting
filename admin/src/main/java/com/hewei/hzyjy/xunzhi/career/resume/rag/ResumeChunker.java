@@ -28,6 +28,7 @@ import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_I
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_RESUME_ID;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_ROLES;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_SKILL_NAMES;
+import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_USER_ID;
 
 @Component
 public class ResumeChunker {
@@ -40,7 +41,8 @@ public class ResumeChunker {
         String resumeId = resolveResumeId(cv);
         String cvType = defaultString(cv.getCvType(), "upload");
 
-        ResumeChunk overview = buildOverviewChunk(cv, resumeId, cvType);
+        String userId = cv.getUserId() == null ? "" : String.valueOf(cv.getUserId());
+        ResumeChunk overview = buildOverviewChunk(cv, resumeId, userId, cvType);
         if (overview != null) {
             chunks.add(overview);
         }
@@ -48,27 +50,27 @@ public class ResumeChunker {
             chunks.add(ResumeChunk.builder()
                     .chunkType(CHUNK_TYPE_SUMMARY)
                     .content("Summary:\n" + cv.getSummary())
-                    .metadata(buildBaseMetadata(resumeId, cvType, CHUNK_TYPE_SUMMARY, 0))
+                    .metadata(buildBaseMetadata(resumeId, userId, cvType, CHUNK_TYPE_SUMMARY, 0))
                     .build());
         }
-        ResumeChunk skills = buildSkillsChunk(cv, resumeId, cvType);
+        ResumeChunk skills = buildSkillsChunk(cv, resumeId, userId, cvType);
         if (skills != null) {
             chunks.add(skills);
         }
         for (int i = 0; i < safeList(cv.getExperiences()).size(); i++) {
-            ResumeChunk chunk = buildExperienceChunk(safeList(cv.getExperiences()).get(i), resumeId, cvType, i);
+            ResumeChunk chunk = buildExperienceChunk(safeList(cv.getExperiences()).get(i), resumeId, userId, cvType, i);
             if (chunk != null) {
                 chunks.add(chunk);
             }
         }
         for (int i = 0; i < safeList(cv.getProjects()).size(); i++) {
-            ResumeChunk chunk = buildProjectChunk(safeList(cv.getProjects()).get(i), resumeId, cvType, i);
+            ResumeChunk chunk = buildProjectChunk(safeList(cv.getProjects()).get(i), resumeId, userId, cvType, i);
             if (chunk != null) {
                 chunks.add(chunk);
             }
         }
         for (int i = 0; i < safeList(cv.getEducations()).size(); i++) {
-            ResumeChunk chunk = buildEducationChunk(safeList(cv.getEducations()).get(i), resumeId, cvType, i);
+            ResumeChunk chunk = buildEducationChunk(safeList(cv.getEducations()).get(i), resumeId, userId, cvType, i);
             if (chunk != null) {
                 chunks.add(chunk);
             }
@@ -86,7 +88,7 @@ public class ResumeChunker {
         return "tmpl_" + Math.abs(Objects.hash(cv.getName(), cv.getTitle(), cv.getSummary()));
     }
 
-    private ResumeChunk buildOverviewChunk(CvBO cv, String resumeId, String cvType) {
+    private ResumeChunk buildOverviewChunk(CvBO cv, String resumeId, String userId, String cvType) {
         StringBuilder content = new StringBuilder("Resume Overview\n");
         appendLine(content, "Name", cv.getName());
         appendLine(content, "Title", cv.getTitle());
@@ -116,7 +118,7 @@ public class ResumeChunker {
         if (content.toString().trim().equals("Resume Overview")) {
             return null;
         }
-        Map<String, String> metadata = buildBaseMetadata(resumeId, cvType, CHUNK_TYPE_OVERVIEW, 0);
+        Map<String, String> metadata = buildBaseMetadata(resumeId, userId, cvType, CHUNK_TYPE_OVERVIEW, 0);
         metadata.put(META_SKILL_NAMES, String.join(", ", skillNames));
         metadata.put(META_INDUSTRIES, String.join(", ", industries));
         metadata.put(META_COMPANIES, String.join(", ", companies));
@@ -124,7 +126,7 @@ public class ResumeChunker {
         return ResumeChunk.builder().chunkType(CHUNK_TYPE_OVERVIEW).content(content.toString().trim()).metadata(metadata).build();
     }
 
-    private ResumeChunk buildSkillsChunk(CvBO cv, String resumeId, String cvType) {
+    private ResumeChunk buildSkillsChunk(CvBO cv, String resumeId, String userId, String cvType) {
         List<SkillBO> skills = safeList(cv.getSkills());
         if (skills.isEmpty()) {
             return null;
@@ -146,12 +148,12 @@ public class ResumeChunker {
         if (skillNames.isEmpty()) {
             return null;
         }
-        Map<String, String> metadata = buildBaseMetadata(resumeId, cvType, CHUNK_TYPE_SKILLS, 0);
+        Map<String, String> metadata = buildBaseMetadata(resumeId, userId, cvType, CHUNK_TYPE_SKILLS, 0);
         metadata.put(META_SKILL_NAMES, String.join(", ", skillNames));
         return ResumeChunk.builder().chunkType(CHUNK_TYPE_SKILLS).content(content.toString().trim()).metadata(metadata).build();
     }
 
-    private ResumeChunk buildExperienceChunk(ExperienceBO exp, String resumeId, String cvType, int index) {
+    private ResumeChunk buildExperienceChunk(ExperienceBO exp, String resumeId, String userId, String cvType, int index) {
         if (exp == null) {
             return null;
         }
@@ -162,14 +164,14 @@ public class ResumeChunker {
         appendLine(content, "Description", exp.getDescription());
         appendHighlights(content, exp.getHighlights());
 
-        Map<String, String> metadata = buildBaseMetadata(resumeId, cvType, CHUNK_TYPE_EXPERIENCE, index);
+        Map<String, String> metadata = buildBaseMetadata(resumeId, userId, cvType, CHUNK_TYPE_EXPERIENCE, index);
         metadata.put(META_INDUSTRIES, defaultString(exp.getIndustry(), ""));
         metadata.put(META_COMPANIES, defaultString(exp.getCompany(), ""));
         metadata.put(META_ROLES, defaultString(exp.getRole(), ""));
         return ResumeChunk.builder().chunkType(CHUNK_TYPE_EXPERIENCE).content(content.toString().trim()).metadata(metadata).build();
     }
 
-    private ResumeChunk buildProjectChunk(ProjectBO project, String resumeId, String cvType, int index) {
+    private ResumeChunk buildProjectChunk(ProjectBO project, String resumeId, String userId, String cvType, int index) {
         if (project == null) {
             return null;
         }
@@ -179,12 +181,12 @@ public class ResumeChunker {
         appendLine(content, "Description", project.getDescription());
         appendHighlights(content, project.getHighlights());
 
-        Map<String, String> metadata = buildBaseMetadata(resumeId, cvType, CHUNK_TYPE_PROJECT, index);
+        Map<String, String> metadata = buildBaseMetadata(resumeId, userId, cvType, CHUNK_TYPE_PROJECT, index);
         metadata.put(META_ROLES, defaultString(project.getRole(), ""));
         return ResumeChunk.builder().chunkType(CHUNK_TYPE_PROJECT).content(content.toString().trim()).metadata(metadata).build();
     }
 
-    private ResumeChunk buildEducationChunk(EducationBO education, String resumeId, String cvType, int index) {
+    private ResumeChunk buildEducationChunk(EducationBO education, String resumeId, String userId, String cvType, int index) {
         if (education == null) {
             return null;
         }
@@ -196,13 +198,14 @@ public class ResumeChunker {
         return ResumeChunk.builder()
                 .chunkType(CHUNK_TYPE_EDUCATION)
                 .content(content.toString().trim())
-                .metadata(buildBaseMetadata(resumeId, cvType, CHUNK_TYPE_EDUCATION, index))
+                .metadata(buildBaseMetadata(resumeId, userId, cvType, CHUNK_TYPE_EDUCATION, index))
                 .build();
     }
 
-    private Map<String, String> buildBaseMetadata(String resumeId, String cvType, String chunkType, int index) {
+    private Map<String, String> buildBaseMetadata(String resumeId, String userId, String cvType, String chunkType, int index) {
         Map<String, String> metadata = new HashMap<>();
         metadata.put(META_RESUME_ID, resumeId);
+        metadata.put(META_USER_ID, userId == null ? "" : userId);
         metadata.put(META_CV_TYPE, cvType);
         metadata.put(META_CHUNK_TYPE, chunkType);
         metadata.put(META_CHUNK_INDEX, String.valueOf(index));

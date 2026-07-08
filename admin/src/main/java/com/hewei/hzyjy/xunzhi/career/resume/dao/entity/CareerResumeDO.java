@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.dao.entity;
+package com.hewei.hzyjy.xunzhi.career.resume.dao.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;

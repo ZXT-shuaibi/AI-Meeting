@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.config;
+package com.hewei.hzyjy.xunzhi.career.config;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;

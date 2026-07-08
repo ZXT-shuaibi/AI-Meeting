@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.api.io;
+package com.hewei.hzyjy.xunzhi.career.api.io;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

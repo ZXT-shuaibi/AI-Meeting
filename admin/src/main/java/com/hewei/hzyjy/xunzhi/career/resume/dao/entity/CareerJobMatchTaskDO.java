@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.dao.entity;
+package com.hewei.hzyjy.xunzhi.career.resume.dao.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -15,6 +15,7 @@ public class CareerJobMatchTaskDO extends BaseDO {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String taskId;
+    private Long userId;
     private String status;
     private String jobDescription;
     private Integer limitCount;

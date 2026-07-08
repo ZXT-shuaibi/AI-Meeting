@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.ai;
 
+import com.hewei.hzyjy.xunzhi.career.config.XunzhiLangChain4jProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
@@ -18,6 +19,7 @@ public class LangChain4jEmbeddingAdapter implements EmbeddingGateway {
     private static final int FALLBACK_DIMENSION = 256;
 
     private final ApplicationContext applicationContext;
+    private final XunzhiLangChain4jProperties properties;
 
     @Override
     public float[] embed(String text) {
@@ -66,18 +68,25 @@ public class LangChain4jEmbeddingAdapter implements EmbeddingGateway {
     }
 
     private float[] hashEmbedding(String text) {
-        float[] vector = new float[FALLBACK_DIMENSION];
+        float[] vector = new float[fallbackDimension()];
         String safeText = text == null ? "" : text.toLowerCase();
         for (String token : safeText.split("[^\\p{IsHan}\\p{Alnum}]+")) {
             if (token.isBlank()) {
                 continue;
             }
             int hash = hash(token);
-            int index = Math.floorMod(hash, FALLBACK_DIMENSION);
+            int index = Math.floorMod(hash, vector.length);
             vector[index] += 1.0f;
         }
         normalize(vector);
         return vector;
+    }
+
+    private int fallbackDimension() {
+        if (properties == null || properties.getQdrant() == null) {
+            return FALLBACK_DIMENSION;
+        }
+        return Math.max(FALLBACK_DIMENSION, properties.getQdrant().getVectorSize());
     }
 
     private int hash(String token) {

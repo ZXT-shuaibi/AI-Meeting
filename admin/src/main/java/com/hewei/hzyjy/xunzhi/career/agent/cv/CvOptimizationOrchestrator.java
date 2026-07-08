@@ -40,6 +40,10 @@ public class CvOptimizationOrchestrator {
                 if (review.score() > SCORE_GATE) {
                     return build(latestCv, bestReview, iterations, true, null, history);
                 }
+                if (i == boundedMaxIterations - 1) {
+                    failureReason = "Score gate not reached after max iterations";
+                    break;
+                }
                 latestCv = tailor.tailor(latestCv, review, referenceTemplates);
                 if (latestCv == null) {
                     failureReason = "Tailor returned null";

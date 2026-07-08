@@ -95,12 +95,15 @@ xunzhi-agent:
     chat-model: ${XUNZHI_LANGCHAIN4J_CHAT_MODEL:qwen-plus}
     embedding-model: ${XUNZHI_LANGCHAIN4J_EMBEDDING_MODEL:text-embedding-v3}
     qdrant:
+      enabled: ${XUNZHI_QDRANT_ENABLED:false}
       collection-name: ${XUNZHI_QDRANT_COLLECTION:xunzhi_resume}
       host: ${XUNZHI_QDRANT_HOST:localhost}
-      port: ${XUNZHI_QDRANT_PORT:6334}
+      port: ${XUNZHI_QDRANT_PORT:6333}
       use-tls: ${XUNZHI_QDRANT_USE_TLS:false}
+      api-key: ${XUNZHI_QDRANT_API_KEY:}
       payload-text-key: ${XUNZHI_QDRANT_PAYLOAD_TEXT_KEY:content}
       vector-size: ${XUNZHI_QDRANT_VECTOR_SIZE:1024}
+      timeout-millis: ${XUNZHI_QDRANT_TIMEOUT_MILLIS:3000}
   career:
     rag:
       vector-min-score-coarse: ${XUNZHI_CAREER_RAG_VECTOR_MIN_SCORE_COARSE:0.60}

@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.rag;
+package com.hewei.hzyjy.xunzhi.career.resume.rag;
 
 import com.hewei.hzyjy.xunzhi.career.config.CareerRagProperties;
 import lombok.RequiredArgsConstructor;

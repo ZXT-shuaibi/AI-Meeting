@@ -14,6 +14,7 @@ public final class ResumeRagConstants {
 
     public static final String META_CHUNK_TYPE = "chunk_type";
     public static final String META_RESUME_ID = "resume_id";
+    public static final String META_USER_ID = "user_id";
     public static final String META_CV_TYPE = "cv_type";
     public static final String META_CHUNK_INDEX = "chunk_index";
     public static final String META_INDUSTRIES = "industries";

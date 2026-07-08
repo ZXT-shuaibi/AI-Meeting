@@ -57,6 +57,29 @@ public class AiTracePublisher {
         ));
     }
 
+
+    public void completed(String traceId, String sceneCode, String sessionId, String provider, String modelOrFlowId, long startMillis, String output, Map<String, Object> metadata) {
+        Instant end = Instant.now();
+        eventPublisher.publishEvent(new AiInvocationCompletedEvent(
+                traceId,
+                sessionId,
+                null,
+                null,
+                sceneCode,
+                sceneCode,
+                sceneCode,
+                provider,
+                modelOrFlowId,
+                Instant.ofEpochMilli(startMillis),
+                end,
+                Math.max(0, end.toEpochMilli() - startMillis),
+                null,
+                abbreviate(output, 2000),
+                null,
+                false,
+                metadata == null ? Map.of() : metadata
+        ));
+    }
     public void failed(String traceId, String sceneCode, String sessionId, String provider, String modelOrFlowId, long startMillis, Throwable error) {
         Instant end = Instant.now();
         eventPublisher.publishEvent(new AiInvocationFailedEvent(

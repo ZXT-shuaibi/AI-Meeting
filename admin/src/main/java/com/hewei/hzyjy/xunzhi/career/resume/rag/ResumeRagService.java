@@ -32,6 +32,7 @@ import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.CHUNK_
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_CHUNK_INDEX;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_CHUNK_TYPE;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_RESUME_ID;
+import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_USER_ID;
 
 @Slf4j
 @Service
@@ -67,10 +68,16 @@ public class ResumeRagService {
     }
 
     public List<String> retrieveTemplates(String query, int limit) {
+        return retrieveTemplates(query, limit, null, Set.of());
+    }
+
+    public List<String> retrieveTemplates(String query, int limit, Long userId, Set<String> allowedResumeIds) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
         long start = System.currentTimeMillis();
+        Set<String> resumeScope = allowedResumeIds == null ? Set.of() : allowedResumeIds;
+        Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
         List<String> allQueries = new ArrayList<>();
         allQueries.add(query);
         String hyde = generateHyDE(query);
@@ -79,16 +86,20 @@ public class ResumeRagService {
         }
         allQueries.addAll(generateMultiQueries(query));
 
-        Set<String> candidateResumeIds = hierarchicalCoarseSearch(allQueries, ragProperties.getCoarseRecallLimit());
+        Set<String> candidateResumeIds = hierarchicalCoarseSearch(allQueries, ragProperties.getCoarseRecallLimit(), resumeScope, metadataFilters);
+        if (candidateResumeIds.isEmpty() && !resumeScope.isEmpty()) {
+            candidateResumeIds = new LinkedHashSet<>(resumeScope);
+        }
         List<RetrievedChunk> fusedChunks = hybridFineSearch(
                 allQueries,
                 candidateResumeIds,
+                metadataFilters,
                 Math.max(limit, 1) * ragProperties.getFineRecallMultiplier()
         );
         List<String> augmented = contextAugment(fusedChunks, Math.max(limit * 2, limit));
         List<String> results = rerank(query, augmented, limit);
-        log.info("Career resume RAG completed. querySize={}, candidates={}, results={}, costMs={}",
-                query.length(), candidateResumeIds.size(), results.size(), System.currentTimeMillis() - start);
+        log.info("Career resume RAG completed. querySize={}, userId={}, scope={}, candidates={}, results={}, costMs={}",
+                query.length(), userId, resumeScope.size(), candidateResumeIds.size(), results.size(), System.currentTimeMillis() - start);
         return results;
     }
 
@@ -139,14 +150,15 @@ public class ResumeRagService {
         }
     }
 
-    private Set<String> hierarchicalCoarseSearch(List<String> queries, int targetLimit) {
+    private Set<String> hierarchicalCoarseSearch(List<String> queries, int targetLimit, Set<String> resumeScope, Map<String, String> metadataFilters) {
         Set<String> resumeIds = new LinkedHashSet<>();
         Set<String> coarseTypes = Set.of(CHUNK_TYPE_OVERVIEW, CHUNK_TYPE_SKILLS);
         for (String query : queries) {
             List<ResumeVectorMatch> matches = vectorStore.search(
                     embeddingGateway.embed(query),
                     coarseTypes,
-                    Set.of(),
+                    resumeScope,
+                    metadataFilters,
                     ragProperties.getVectorMinScoreCoarse(),
                     targetLimit * 2
             );
@@ -163,25 +175,17 @@ public class ResumeRagService {
         return resumeIds;
     }
 
-    private List<RetrievedChunk> hybridFineSearch(List<String> queries, Set<String> candidateResumeIds, int limit) {
+    private List<RetrievedChunk> hybridFineSearch(List<String> queries, Set<String> candidateResumeIds, Map<String, String> metadataFilters, int limit) {
         List<List<RetrievedChunk>> rankedLists = new ArrayList<>();
         for (String query : queries) {
             List<ResumeVectorMatch> vectorMatches = vectorStore.search(
                     embeddingGateway.embed(query),
                     Set.of(),
                     candidateResumeIds,
+                    metadataFilters,
                     ragProperties.getVectorMinScoreFine(),
                     limit
             );
-            if (vectorMatches.isEmpty() && !candidateResumeIds.isEmpty()) {
-                vectorMatches = vectorStore.search(
-                        embeddingGateway.embed(query),
-                        Set.of(),
-                        Set.of(),
-                        ragProperties.getVectorMinScoreFine(),
-                        limit
-                );
-            }
             List<RetrievedChunk> chunks = vectorMatches.stream().map(this::toRetrievedChunk).toList();
             List<String> texts = chunks.stream().map(RetrievedChunk::text).distinct().toList();
             Map<String, Double> bm25Scores = Bm25Scorer.score(texts, query);

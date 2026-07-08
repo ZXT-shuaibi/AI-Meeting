@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.rag;
+package com.hewei.hzyjy.xunzhi.career.resume.rag;
 
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -53,12 +53,18 @@ public class ResilientResumeVectorStore implements ResumeVectorStore {
     }
 
     @Override
-    public List<ResumeVectorMatch> search(float[] queryVector, Set<String> chunkTypes, Set<String> resumeIds, double minScore, int limit) {
+    public List<ResumeVectorMatch> search(
+            float[] queryVector,
+            Set<String> chunkTypes,
+            Set<String> resumeIds,
+            Map<String, String> metadataFilters,
+            double minScore,
+            int limit) {
         warmupFromDatabase();
         QdrantResumeVectorStore qdrant = qdrantVectorStoreProvider.getIfAvailable();
         if (qdrant != null && qdrant.available()) {
             try {
-                List<ResumeVectorMatch> matches = qdrant.search(queryVector, chunkTypes, resumeIds, minScore, limit);
+                List<ResumeVectorMatch> matches = qdrant.search(queryVector, chunkTypes, resumeIds, metadataFilters, minScore, limit);
                 if (!matches.isEmpty()) {
                     return matches;
                 }
@@ -66,7 +72,7 @@ public class ResilientResumeVectorStore implements ResumeVectorStore {
                 log.warn("Qdrant vector search failed, using in-memory fallback", ex);
             }
         }
-        return inMemoryVectorStore.search(queryVector, chunkTypes, resumeIds, minScore, limit);
+        return inMemoryVectorStore.search(queryVector, chunkTypes, resumeIds, metadataFilters, minScore, limit);
     }
 
     @Override

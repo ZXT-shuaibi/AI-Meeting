@@ -7,6 +7,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -30,7 +31,7 @@ public class SpringAiGatewayAdapter implements AiGateway {
             if (builder == null) {
                 String fallback = localFallback(request);
                 if (tracePublisher != null) {
-                    tracePublisher.completed(traceId, request.sceneCode(), request.sessionId(), "spring-ai", null, start, fallback);
+                    tracePublisher.completed(traceId, request.sceneCode(), request.sessionId(), "spring-ai", null, start, fallback, Map.of("degraded", true, "reason", "ChatClient.Builder bean is unavailable"));
                 }
                 return AiGatewayResult.builder()
                         .content(fallback)
@@ -55,11 +56,13 @@ public class SpringAiGatewayAdapter implements AiGateway {
                     .build();
         } catch (Exception ex) {
             log.warn("Spring AI gateway call failed, fallback will be used. scene={}", request.sceneCode(), ex);
+            String fallback = localFallback(request);
             if (tracePublisher != null) {
                 tracePublisher.failed(traceId, request.sceneCode(), request.sessionId(), "spring-ai", null, start, ex);
+                tracePublisher.completed(traceId, request.sceneCode(), request.sessionId(), "spring-ai", null, start, fallback, Map.of("degraded", true, "fallbackAfterFailure", true, "error", ex.getMessage() == null ? "" : ex.getMessage()));
             }
             return AiGatewayResult.builder()
-                    .content(localFallback(request))
+                    .content(fallback)
                     .provider("spring-ai")
                     .degraded(true)
                     .errorMessage(ex.getMessage())

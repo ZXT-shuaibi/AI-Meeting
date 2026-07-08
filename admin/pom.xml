@@ -15,6 +15,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <argLine></argLine>
     </properties>
 
     <dependencies>
@@ -63,54 +64,6 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-deepseek</artifactId>
         </dependency>
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j</artifactId>
-            <version>${langchain4j.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-agentic</artifactId>
-            <version>${langchain4j-agentic.version}</version>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-spring-boot-starter</artifactId>
-            <version>${langchain4j-agentic.version}</version>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
-            <version>${langchain4j-agentic.version}</version>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>dev.langchain4j</groupId>
-            <artifactId>langchain4j-qdrant</artifactId>
-            <version>${langchain4j-agentic.version}</version>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>dashscope-sdk-java</artifactId>
-            <version>${dashscope.version}</version>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
-            <groupId>io.qdrant</groupId>
-            <artifactId>client</artifactId>
-            <version>${qdrant-client.version}</version>
-            <optional>true</optional>
-        </dependency>
-
         <dependency>
             <groupId>us.codecraft</groupId>
             <artifactId>webmagic-core</artifactId>
@@ -327,4 +280,46 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>career-external-ai</id>
+            <dependencies>
+                <dependency>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j</artifactId>
+                    <version>${langchain4j.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j-agentic</artifactId>
+                    <version>${langchain4j-agentic.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j-spring-boot-starter</artifactId>
+                    <version>${langchain4j-agentic.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+                    <version>${langchain4j-agentic.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j-qdrant</artifactId>
+                    <version>${langchain4j-agentic.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>com.alibaba</groupId>
+                    <artifactId>dashscope-sdk-java</artifactId>
+                    <version>${dashscope.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>io.qdrant</groupId>
+                    <artifactId>client</artifactId>
+                    <version>${qdrant-client.version}</version>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 </project>

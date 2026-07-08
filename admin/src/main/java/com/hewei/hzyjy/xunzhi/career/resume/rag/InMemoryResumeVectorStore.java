@@ -1,10 +1,11 @@
-﻿package com.hewei.hzyjy.xunzhi.career.resume.rag;
+package com.hewei.hzyjy.xunzhi.career.resume.rag;
 
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -31,8 +32,18 @@ public class InMemoryResumeVectorStore {
     }
 
     public List<ResumeVectorMatch> search(float[] queryVector, Set<String> chunkTypes, Set<String> resumeIds, double minScore, int limit) {
+        return search(queryVector, chunkTypes, resumeIds, Map.of(), minScore, limit);
+    }
+
+    public List<ResumeVectorMatch> search(
+            float[] queryVector,
+            Set<String> chunkTypes,
+            Set<String> resumeIds,
+            Map<String, String> metadataFilters,
+            double minScore,
+            int limit) {
         return documents.stream()
-                .filter(document -> matchesFilter(document, chunkTypes, resumeIds))
+                .filter(document -> matchesFilter(document, chunkTypes, resumeIds, metadataFilters))
                 .map(document -> ResumeVectorMatch.builder()
                         .document(document)
                         .score(cosine(queryVector, document.vector()))
@@ -56,11 +67,27 @@ public class InMemoryResumeVectorStore {
         return documents.isEmpty();
     }
 
-    private boolean matchesFilter(ResumeVectorDocument document, Set<String> chunkTypes, Set<String> resumeIds) {
-        if (chunkTypes != null && !chunkTypes.isEmpty() && !chunkTypes.contains(document.metadata().get(META_CHUNK_TYPE))) {
+    private boolean matchesFilter(
+            ResumeVectorDocument document,
+            Set<String> chunkTypes,
+            Set<String> resumeIds,
+            Map<String, String> metadataFilters) {
+        Map<String, String> metadata = document.metadata() == null ? Map.of() : document.metadata();
+        if (chunkTypes != null && !chunkTypes.isEmpty() && !chunkTypes.contains(metadata.get(META_CHUNK_TYPE))) {
             return false;
         }
-        return resumeIds == null || resumeIds.isEmpty() || resumeIds.contains(document.metadata().get(META_RESUME_ID));
+        if (resumeIds != null && !resumeIds.isEmpty() && !resumeIds.contains(metadata.get(META_RESUME_ID))) {
+            return false;
+        }
+        if (metadataFilters != null && !metadataFilters.isEmpty()) {
+            for (Map.Entry<String, String> entry : metadataFilters.entrySet()) {
+                String expected = entry.getValue();
+                if (expected != null && !expected.equals(metadata.get(entry.getKey()))) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private double cosine(float[] left, float[] right) {

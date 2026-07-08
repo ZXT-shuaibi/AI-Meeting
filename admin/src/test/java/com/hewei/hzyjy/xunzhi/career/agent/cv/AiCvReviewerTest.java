@@ -1,4 +1,4 @@
-﻿package com.hewei.hzyjy.xunzhi.career.agent.cv;
+package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
