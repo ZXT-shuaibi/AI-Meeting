@@ -125,7 +125,7 @@ class InterviewSessionControllerPressureTest {
 
     @Test
     void shouldHandleConcurrentExtractionRequestsWithMockedWorkflowData() throws Exception {
-        when(interviewSessionFacade.extractInterviewQuestions(anyString(), any(), anyLong(), anyString()))
+        when(interviewSessionFacade.extractInterviewQuestions(anyString(), any(), anyLong(), anyString(), any()))
                 .thenAnswer(invocation -> {
                     InterviewQuestionRespDTO resp = new InterviewQuestionRespDTO();
                     resp.setSessionId(invocation.getArgument(0));
@@ -178,7 +178,7 @@ class InterviewSessionControllerPressureTest {
         );
 
         verify(interviewSessionFacade, times(concurrency))
-                .extractInterviewQuestions(anyString(), any(), anyLong(), anyString());
+                .extractInterviewQuestions(anyString(), any(), anyLong(), anyString(), any());
     }
 
     @Test

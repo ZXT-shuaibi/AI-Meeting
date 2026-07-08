@@ -2,6 +2,10 @@ package com.hewei.hzyjy.xunzhi.interview.application;
 
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewSessionRestoreRespDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.RadarChartDTO;
+import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlan;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeUploadResult;
+import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.interview.dao.entity.InterviewQuestion;
 import com.hewei.hzyjy.xunzhi.interview.dao.entity.InterviewSession;
 import com.hewei.hzyjy.xunzhi.interview.application.runtime.InterviewSessionRuntimeRehydrateService;
@@ -21,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -46,7 +51,8 @@ class InterviewSessionFacadeTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();
@@ -77,6 +83,52 @@ class InterviewSessionFacadeTest {
     }
 
     @Test
+    void shouldAttachCareerPlanToMainInterviewExtractionWhenJobDescriptionProvided() {
+        InterviewWorkflowService workflowService = mock(InterviewWorkflowService.class);
+        InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
+        InterviewQuestionService questionService = mock(InterviewQuestionService.class);
+        InterviewRecordService recordService = mock(InterviewRecordService.class);
+        InterviewResumePreviewService previewService = mock(InterviewResumePreviewService.class);
+        InterviewSessionService sessionService = mock(InterviewSessionService.class);
+        InterviewSessionRuntimeSnapshotService runtimeSnapshotService = mock(InterviewSessionRuntimeSnapshotService.class);
+        InterviewSessionRuntimeRehydrateService runtimeRehydrateService = mock(InterviewSessionRuntimeRehydrateService.class);
+        ResumeApplicationService resumeApplicationService = mock(ResumeApplicationService.class);
+        InterviewSessionFacade facade = new InterviewSessionFacade(
+                workflowService,
+                cacheService,
+                questionService,
+                recordService,
+                previewService,
+                sessionService,
+                runtimeSnapshotService,
+                runtimeRehydrateService,
+                resumeApplicationService
+        );
+        org.springframework.mock.web.MockMultipartFile resumePdf = new org.springframework.mock.web.MockMultipartFile(
+                "resumePdf",
+                "resume.pdf",
+                "application/pdf",
+                "resume".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+        com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewQuestionRespDTO workflowResponse =
+                new com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewQuestionRespDTO();
+        workflowResponse.setIsSuccess(1);
+        workflowResponse.setResumeFileUrl("https://example.com/resume.pdf");
+        workflowResponse.setInterviewType("backend");
+        when(workflowService.extractInterviewQuestions(any())).thenReturn(workflowResponse);
+        CvBO cv = CvBO.builder().id(901L).userId(77L).name("candidate").summary("Spring AI Redis").build();
+        when(resumeApplicationService.upload(77L, resumePdf))
+                .thenReturn(new ResumeUploadResult(901L, cv, "COMPLETED", 1, null));
+        when(resumeApplicationService.planInterview(77L, "session-plan", 901L, "Java backend JD"))
+                .thenReturn(InterviewPlan.builder().sessionId("session-plan").firstQuestion("Explain your Redis project").build());
+
+        facade.extractInterviewQuestions("session-plan", resumePdf, 77L, "tester", "Java backend JD");
+
+        verify(resumeApplicationService).upload(77L, resumePdf);
+        verify(resumeApplicationService).planInterview(77L, "session-plan", 901L, "Java backend JD");
+    }
+
+    @Test
     void shouldReturnRadarChartWithoutWritingInterviewRecord() {
         InterviewWorkflowService workflowService = mock(InterviewWorkflowService.class);
         InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
@@ -94,7 +146,8 @@ class InterviewSessionFacadeTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();
@@ -132,7 +185,8 @@ class InterviewSessionFacadeTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();

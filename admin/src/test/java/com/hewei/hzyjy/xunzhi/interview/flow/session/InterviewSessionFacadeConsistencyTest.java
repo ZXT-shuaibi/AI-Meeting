@@ -3,6 +3,7 @@ package com.hewei.hzyjy.xunzhi.interview.flow.session;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewRecordRespDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewSessionRestoreRespDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.RadarChartDTO;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.interview.application.InterviewWorkflowService;
 import com.hewei.hzyjy.xunzhi.interview.application.runtime.InterviewSessionRuntimeRehydrateService;
 import com.hewei.hzyjy.xunzhi.interview.application.runtime.InterviewSessionRuntimeSnapshotService;
@@ -55,7 +56,8 @@ class InterviewSessionFacadeConsistencyTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();
@@ -104,7 +106,8 @@ class InterviewSessionFacadeConsistencyTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();
@@ -139,7 +142,8 @@ class InterviewSessionFacadeConsistencyTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();
@@ -178,7 +182,8 @@ class InterviewSessionFacadeConsistencyTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();

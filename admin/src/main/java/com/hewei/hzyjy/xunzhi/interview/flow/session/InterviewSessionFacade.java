@@ -3,6 +3,8 @@ package com.hewei.hzyjy.xunzhi.interview.flow.session;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hewei.hzyjy.xunzhi.agent.api.io.resp.AgentMessageHistoryRespDTO;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeUploadResult;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.common.enums.InterviewErrorCodeEnum;
 import com.hewei.hzyjy.xunzhi.interview.api.io.req.DemeanorEvaluationReqDTO;
@@ -50,6 +52,7 @@ public class InterviewSessionFacade {
     private final InterviewSessionService interviewSessionService;
     private final InterviewSessionRuntimeSnapshotService runtimeSnapshotService;
     private final InterviewSessionRuntimeRehydrateService runtimeRehydrateService;
+    private final ResumeApplicationService resumeApplicationService;
 
     public InterviewSessionCreateRespDTO createSession(Long userId) {
         return interviewSessionService.createSession(userId);
@@ -89,6 +92,15 @@ public class InterviewSessionFacade {
             MultipartFile resumePdf,
             Long userId,
             String username) {
+        return extractInterviewQuestions(sessionId, resumePdf, userId, username, null);
+    }
+
+    public InterviewQuestionRespDTO extractInterviewQuestions(
+            String sessionId,
+            MultipartFile resumePdf,
+            Long userId,
+            String username,
+            String jobDescription) {
         // 1) 进入提取前先把会话打到“上传中”，避免并发接口误判状态。
         interviewSessionService.markResumeUploading(sessionId, userId);
 
@@ -108,12 +120,29 @@ public class InterviewSessionFacade {
                     response.getInterviewType()
             );
             runtimeSnapshotService.refreshAfterQuestionExtraction(sessionId);
+            attachCareerInterviewPlan(sessionId, resumePdf, userId, jobDescription);
             return response;
         }
 
         // 3) 提取失败回落到 DRAFT，保留后续重试入口。
         interviewSessionService.markDraft(sessionId, userId);
         return response;
+    }
+
+    private void attachCareerInterviewPlan(String sessionId, MultipartFile resumePdf, Long userId, String jobDescription) {
+        if (StrUtil.isBlank(jobDescription)) {
+            return;
+        }
+        try {
+            ResumeUploadResult uploadResult = resumeApplicationService.upload(userId, resumePdf);
+            if (uploadResult == null || uploadResult.resumeId() == null) {
+                log.debug("Career interview planning skipped because resume upload returned no resumeId. sessionId={}", sessionId);
+                return;
+            }
+            resumeApplicationService.planInterview(userId, sessionId, uploadResult.resumeId(), jobDescription);
+        } catch (Exception ex) {
+            log.warn("Career Plan-Execute-Reflect planning failed after legacy question extraction, legacy interview flow will continue. sessionId={}", sessionId, ex);
+        }
     }
 
     public InterviewAnswerRespDTO answerInterviewQuestion(

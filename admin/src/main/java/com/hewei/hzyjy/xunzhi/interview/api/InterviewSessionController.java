@@ -91,9 +91,10 @@ public class InterviewSessionController {
     public Result<InterviewQuestionRespDTO> extractInterviewQuestions(
             @PathVariable String sessionId,
             @RequestParam("resumePdf") MultipartFile resumePdf,
+            @RequestParam(value = "jobDescription", required = false) String jobDescription,
             @CurrentUser UserContext currentUser) {
         return Results.success(interviewSessionFacade.extractInterviewQuestions(
-                sessionId, resumePdf, currentUser.getUserId(), currentUser.getUsername()));
+                sessionId, resumePdf, currentUser.getUserId(), currentUser.getUsername(), jobDescription));
     }
 
     @PostMapping("/sessions/{sessionId}/interview/answer")

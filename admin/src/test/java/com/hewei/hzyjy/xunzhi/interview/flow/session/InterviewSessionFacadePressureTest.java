@@ -4,6 +4,7 @@ import com.hewei.hzyjy.xunzhi.interview.api.io.req.InterviewAnswerReqDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.req.InterviewQuestionReqDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewAnswerRespDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewQuestionRespDTO;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.interview.application.InterviewWorkflowService;
 import com.hewei.hzyjy.xunzhi.interview.application.runtime.InterviewSessionRuntimeRehydrateService;
 import com.hewei.hzyjy.xunzhi.interview.application.runtime.InterviewSessionRuntimeSnapshotService;
@@ -61,7 +62,8 @@ class InterviewSessionFacadePressureTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         InterviewSession session = new InterviewSession();
@@ -148,7 +150,8 @@ class InterviewSessionFacadePressureTest {
                 previewService,
                 sessionService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(ResumeApplicationService.class)
         );
 
         doNothing().when(sessionService).markResumeUploading(anyString(), anyLong());
