@@ -17,6 +17,7 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mock.web.MockMultipartFile;
 
@@ -120,8 +121,10 @@ class ResumeApplicationServiceTest {
 
         ResumeUploadResult result = service.upload(7L, file);
 
+        ArgumentCaptor<CvBO> savedCv = ArgumentCaptor.forClass(CvBO.class);
         assertEquals(13L, result.resumeId());
-        verify(store).save(any());
+        verify(store).save(savedCv.capture());
+        org.junit.jupiter.api.Assertions.assertTrue(savedCv.getValue().getSummary().contains("Java Redis PDF resume"));
     }
 
     @Test
@@ -140,6 +143,27 @@ class ResumeApplicationServiceTest {
 
         org.junit.jupiter.api.Assertions.assertTrue(ex.getMessage().contains("PDF resume exceeds 40 page limit"));
         verify(store, never()).save(any());
+    }
+
+    @Test
+    void uploadAcceptsPdfResumeAtPageLimit() throws Exception {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        when(store.save(any())).thenAnswer(invocation -> ((CvBO) invocation.getArgument(0)).toBuilder().id(14L).build());
+        when(store.findByIdAndUserId(14L, 7L)).thenReturn(Optional.of(CvBO.builder().id(14L).userId(7L).name("resume.pdf").summary("Java Redis page limit resume").build()));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+        ResumeApplicationService service = service(store, ragService, mock(CvOptimizationOrchestrator.class));
+        MockMultipartFile file = new MockMultipartFile(
+                "resume",
+                "resume.pdf",
+                "application/pdf",
+                minimalPdfWithPages(40, "Java Redis page limit resume")
+        );
+
+        ResumeUploadResult result = service.upload(7L, file);
+
+        assertEquals(14L, result.resumeId());
+        verify(store).save(any());
     }
 
     @Test
@@ -219,10 +243,25 @@ class ResumeApplicationServiceTest {
             return output.toByteArray();
         }
     }
+
     private byte[] minimalPdfWithPages(int pages) throws Exception {
+        return minimalPdfWithPages(pages, null);
+    }
+
+    private byte[] minimalPdfWithPages(int pages, String firstPageText) throws Exception {
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             for (int i = 0; i < pages; i++) {
-                document.addPage(new PDPage());
+                PDPage page = new PDPage();
+                document.addPage(page);
+                if (i == 0 && firstPageText != null) {
+                    try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
+                        contentStream.beginText();
+                        contentStream.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                        contentStream.newLineAtOffset(72, 720);
+                        contentStream.showText(firstPageText);
+                        contentStream.endText();
+                    }
+                }
             }
             document.save(output);
             return output.toByteArray();

@@ -14,6 +14,92 @@ CREATE TABLE IF NOT EXISTS `career_resume` (
   KEY `idx_cv_type` (`cv_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume structured aggregate';
 
+
+CREATE TABLE IF NOT EXISTS `career_resume_contact` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `phone` varchar(64) DEFAULT NULL COMMENT 'Phone',
+  `email` varchar(128) DEFAULT NULL COMMENT 'Email',
+  `location` varchar(128) DEFAULT NULL COMMENT 'Location',
+  `website` varchar(256) DEFAULT NULL COMMENT 'Website',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_resume_contact` (`resume_id`),
+  KEY `idx_email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume contact detail';
+
+CREATE TABLE IF NOT EXISTS `career_resume_education` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `item_index` int DEFAULT 0 COMMENT 'Order index',
+  `school` varchar(128) DEFAULT NULL COMMENT 'School',
+  `major` varchar(128) DEFAULT NULL COMMENT 'Major',
+  `degree` varchar(64) DEFAULT NULL COMMENT 'Degree',
+  `start_date` date DEFAULT NULL COMMENT 'Start date',
+  `end_date` date DEFAULT NULL COMMENT 'End date',
+  `description` text COMMENT 'Description',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_index` (`resume_id`, `item_index`),
+  KEY `idx_school` (`school`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume education detail';
+
+CREATE TABLE IF NOT EXISTS `career_resume_experience` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `item_index` int DEFAULT 0 COMMENT 'Order index',
+  `company` varchar(128) DEFAULT NULL COMMENT 'Company',
+  `industry` varchar(128) DEFAULT NULL COMMENT 'Industry',
+  `role` varchar(128) DEFAULT NULL COMMENT 'Role',
+  `start_date` date DEFAULT NULL COMMENT 'Start date',
+  `end_date` date DEFAULT NULL COMMENT 'End date',
+  `description` text COMMENT 'Description',
+  `highlights_json` text COMMENT 'HighlightBO JSON array',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_index` (`resume_id`, `item_index`),
+  KEY `idx_company_role` (`company`, `role`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume experience detail';
+
+CREATE TABLE IF NOT EXISTS `career_resume_project` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `item_index` int DEFAULT 0 COMMENT 'Order index',
+  `name` varchar(128) DEFAULT NULL COMMENT 'Project name',
+  `role` varchar(128) DEFAULT NULL COMMENT 'Role',
+  `start_date` date DEFAULT NULL COMMENT 'Start date',
+  `end_date` date DEFAULT NULL COMMENT 'End date',
+  `description` text COMMENT 'Description',
+  `highlights_json` text COMMENT 'HighlightBO JSON array',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_index` (`resume_id`, `item_index`),
+  KEY `idx_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume project detail';
+
+CREATE TABLE IF NOT EXISTS `career_resume_skill` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `item_index` int DEFAULT 0 COMMENT 'Order index',
+  `category` varchar(64) DEFAULT NULL COMMENT 'Skill category',
+  `name` varchar(128) DEFAULT NULL COMMENT 'Skill name',
+  `level` varchar(64) DEFAULT NULL COMMENT 'Skill level',
+  `highlights_json` text COMMENT 'HighlightBO JSON array',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_index` (`resume_id`, `item_index`),
+  KEY `idx_skill_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume skill detail';
 CREATE TABLE IF NOT EXISTS `career_resume_chunk` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
   `resume_id` bigint NOT NULL COMMENT 'Resume id',

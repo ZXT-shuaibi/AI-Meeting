@@ -30,6 +30,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.Writer;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -312,8 +313,57 @@ public class ResumeApplicationService {
             }
             PDFTextStripper pdfStripper = new PDFTextStripper();
             pdfStripper.setSortByPosition(true);
-            return limitResumeText(pdfStripper.getText(document).replaceAll("\\s+", " ").trim());
+            CappedResumeTextWriter writer = new CappedResumeTextWriter(MAX_RESUME_TEXT_LENGTH);
+            try {
+                pdfStripper.writeText(document, writer);
+            } catch (ResumeTextLimitReachedException ignored) {
+                log.debug("PDF resume text extraction stopped after reaching {} characters", MAX_RESUME_TEXT_LENGTH);
+            }
+            return writer.normalizedText();
         }
+    }
+
+
+    private static final class CappedResumeTextWriter extends Writer {
+        private final StringBuilder buffer;
+        private final int maxChars;
+
+        private CappedResumeTextWriter(int maxChars) {
+            this.maxChars = maxChars;
+            this.buffer = new StringBuilder(Math.min(maxChars, 8192));
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) {
+            if (len <= 0) {
+                return;
+            }
+            if (buffer.length() >= maxChars) {
+                throw new ResumeTextLimitReachedException();
+            }
+            int writable = Math.min(len, maxChars - buffer.length());
+            buffer.append(cbuf, off, writable);
+            if (writable < len || buffer.length() >= maxChars) {
+                throw new ResumeTextLimitReachedException();
+            }
+        }
+
+        @Override
+        public void flush() {
+            // No external resource to flush.
+        }
+
+        @Override
+        public void close() {
+            // No external resource to close.
+        }
+
+        private String normalizedText() {
+            return buffer.toString().replaceAll("\\s+", " ").trim();
+        }
+    }
+
+    private static final class ResumeTextLimitReachedException extends RuntimeException {
     }
 
     private String extractDocxText(byte[] bytes) throws Exception {
