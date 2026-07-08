@@ -11,6 +11,11 @@ import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.ProjectBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mock.web.MockMultipartFile;
@@ -99,6 +104,45 @@ class ResumeApplicationServiceTest {
     }
 
     @Test
+    void uploadExtractsTextFromPdfResume() throws Exception {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        when(store.save(any())).thenAnswer(invocation -> ((CvBO) invocation.getArgument(0)).toBuilder().id(13L).build());
+        when(store.findByIdAndUserId(13L, 7L)).thenReturn(Optional.of(CvBO.builder().id(13L).userId(7L).name("resume.pdf").summary("Java Redis PDF resume").build()));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+        ResumeApplicationService service = service(store, ragService, mock(CvOptimizationOrchestrator.class));
+        MockMultipartFile file = new MockMultipartFile(
+                "resume",
+                "resume.pdf",
+                "application/pdf",
+                minimalPdf("Java Redis PDF resume")
+        );
+
+        ResumeUploadResult result = service.upload(7L, file);
+
+        assertEquals(13L, result.resumeId());
+        verify(store).save(any());
+    }
+
+    @Test
+    void uploadRejectsPdfResumeWithTooManyPages() throws Exception {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        ResumeApplicationService service = service(store, ragService, mock(CvOptimizationOrchestrator.class));
+        MockMultipartFile file = new MockMultipartFile(
+                "resume",
+                "resume.pdf",
+                "application/pdf",
+                minimalPdfWithPages(41)
+        );
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> service.upload(7L, file));
+
+        org.junit.jupiter.api.Assertions.assertTrue(ex.getMessage().contains("PDF resume exceeds 40 page limit"));
+        verify(store, never()).save(any());
+    }
+
+    @Test
     void uploadUsesStructuredResumeParserBeforeHeuristicFallback() {
         ResumeStore store = mock(ResumeStore.class);
         ResumeRagService ragService = mock(ResumeRagService.class);
@@ -158,6 +202,31 @@ class ResumeApplicationServiceTest {
             zip.closeEntry();
         }
         return output.toByteArray();
+    }
+
+    private byte[] minimalPdf(String text) throws Exception {
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream contentStream = new PDPageContentStream(document, page)) {
+                contentStream.beginText();
+                contentStream.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                contentStream.newLineAtOffset(72, 720);
+                contentStream.showText(text);
+                contentStream.endText();
+            }
+            document.save(output);
+            return output.toByteArray();
+        }
+    }
+    private byte[] minimalPdfWithPages(int pages) throws Exception {
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            for (int i = 0; i < pages; i++) {
+                document.addPage(new PDPage());
+            }
+            document.save(output);
+            return output.toByteArray();
+        }
     }
 
     private static <T> ObjectProvider<T> emptyProvider() {

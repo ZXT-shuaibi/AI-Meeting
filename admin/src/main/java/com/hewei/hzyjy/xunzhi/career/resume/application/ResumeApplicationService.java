@@ -17,6 +17,10 @@ import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.io.RandomAccessReadBuffer;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -52,6 +56,7 @@ public class ResumeApplicationService {
     private static final int MAX_DOCX_ENTRY_BYTES = 2 * 1024 * 1024;
     private static final int MAX_DOCX_TOTAL_UNCOMPRESSED_BYTES = 4 * 1024 * 1024;
     private static final int MAX_DOCX_ENTRIES = 128;
+    private static final int MAX_PDF_PAGES = 40;
     private static final int MAX_JD_LENGTH = 12000;
     private static final int MAX_QUESTION_LENGTH = 4000;
     private static final int MAX_ANSWER_LENGTH = 12000;
@@ -273,17 +278,19 @@ public class ResumeApplicationService {
         }
         String filename = safeFilename(file);
         String ext = extension(filename);
-        if ("pdf".equals(ext)) {
-            throw new IllegalArgumentException("PDF resume parsing requires OCR/PDF text extractor integration; upload TXT/MD/DOCX for this endpoint or wire a PDF extractor first");
-        }
-        if (!(TEXT_EXTENSIONS.contains(ext) || "docx".equals(ext))) {
-            throw new IllegalArgumentException("Unsupported resume file type: " + ext + ". Supported: txt, md, json, csv, docx");
+        if (!(TEXT_EXTENSIONS.contains(ext) || "docx".equals(ext) || "pdf".equals(ext))) {
+            throw new IllegalArgumentException("Unsupported resume file type: " + ext + ". Supported: txt, md, json, csv, docx, pdf");
         }
     }
 
     private String extractText(MultipartFile file) {
         try {
             String ext = extension(safeFilename(file));
+            if ("pdf".equals(ext)) {
+                try (InputStream input = file.getInputStream()) {
+                    return extractPdfText(input);
+                }
+            }
             byte[] bytes = file.getBytes();
             if ("docx".equals(ext)) {
                 return extractDocxText(bytes);
@@ -291,6 +298,21 @@ public class ResumeApplicationService {
             return decodeUtf8(bytes);
         } catch (Exception ex) {
             throw new IllegalArgumentException("Resume parse failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    private String extractPdfText(InputStream input) throws Exception {
+        try (RandomAccessReadBuffer buffer = new RandomAccessReadBuffer(input);
+             PDDocument document = Loader.loadPDF(buffer)) {
+            if (document.isEncrypted()) {
+                throw new IllegalArgumentException("Encrypted PDF resumes are not supported");
+            }
+            if (document.getNumberOfPages() > MAX_PDF_PAGES) {
+                throw new IllegalArgumentException("PDF resume exceeds " + MAX_PDF_PAGES + " page limit");
+            }
+            PDFTextStripper pdfStripper = new PDFTextStripper();
+            pdfStripper.setSortByPosition(true);
+            return limitResumeText(pdfStripper.getText(document).replaceAll("\\s+", " ").trim());
         }
     }
 
