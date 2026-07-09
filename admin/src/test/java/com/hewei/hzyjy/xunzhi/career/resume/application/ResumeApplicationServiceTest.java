@@ -39,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,7 +56,7 @@ class ResumeApplicationServiceTest {
         ResumeRagService ragService = mock(ResumeRagService.class);
         when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")))).thenReturn(List.of("template"));
         CvOptimizationOrchestrator orchestrator = mock(CvOptimizationOrchestrator.class);
-        when(orchestrator.optimize(eq(original), eq("Java JD"), eq(List.of("template")), eq(3)))
+        when(orchestrator.optimize(eq(original), eq("Java JD"), eq(List.of("template")), isNull()))
                 .thenReturn(CvOptimizationResult.builder()
                         .cv(draft)
                         .iterations(3)
