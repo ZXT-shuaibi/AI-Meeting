@@ -3,6 +3,8 @@ package com.hewei.hzyjy.xunzhi.career.api;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
 import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeParseTaskResult;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeParseTaskStatus;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.common.convention.context.UserContext;
 import org.junit.jupiter.api.Test;
@@ -10,6 +12,7 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.nio.charset.StandardCharsets;
@@ -69,6 +72,44 @@ class ResumeCareerControllerTest {
         assertEquals("# candidate", new String(response.getBody(), StandardCharsets.UTF_8));
         org.junit.jupiter.api.Assertions.assertTrue(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).contains("candidate.md"));
         verify(service).renderResume(7L, 11L, "markdown");
+    }
+
+    @Test
+    void uploadAsyncReturnsParseTaskAndDelegatesCurrentUser() {
+        ResumeApplicationService service = mock(ResumeApplicationService.class);
+        ResumeCareerController controller = new ResumeCareerController(service, Runnable::run);
+        UserContext user = new UserContext(7L, "candidate");
+        MockMultipartFile file = new MockMultipartFile("resume", "resume.txt", "text/plain", "Java".getBytes(StandardCharsets.UTF_8));
+        ResumeParseTaskResult task = parseTask("task-1", ResumeParseTaskStatus.PROCESSING);
+        when(service.uploadAsync(7L, file, "upload")).thenReturn(task);
+
+        assertEquals(task, controller.uploadAsync(file, "upload", user).getData());
+
+        verify(service).uploadAsync(7L, file, "upload");
+    }
+
+    @Test
+    void parseTaskStatusCancelAndRetryUseCurrentUserScope() {
+        ResumeApplicationService service = mock(ResumeApplicationService.class);
+        ResumeCareerController controller = new ResumeCareerController(service, Runnable::run);
+        UserContext user = new UserContext(7L, "candidate");
+        when(service.getParseTask(7L, "task-1")).thenReturn(parseTask("task-1", ResumeParseTaskStatus.ANALYZING));
+        when(service.cancelParseTask(7L, "task-1")).thenReturn(parseTask("task-1", ResumeParseTaskStatus.CANCELED));
+        when(service.retryParseTask(7L, "task-1")).thenReturn(parseTask("task-2", ResumeParseTaskStatus.PROCESSING));
+
+        assertEquals(ResumeParseTaskStatus.ANALYZING.name(), controller.getParseTask("task-1", user).getData().status());
+        assertEquals(ResumeParseTaskStatus.CANCELED.name(), controller.cancelParseTask("task-1", user).getData().status());
+        assertEquals("task-2", controller.retryParseTask("task-1", user).getData().taskId());
+
+        verify(service).getParseTask(7L, "task-1");
+        verify(service).cancelParseTask(7L, "task-1");
+        verify(service).retryParseTask(7L, "task-1");
+    }
+
+    private ResumeParseTaskResult parseTask(String taskId, ResumeParseTaskStatus status) {
+        return new ResumeParseTaskResult(taskId, 7L, status.name(), status.message(), 5, 65L, null,
+                "resume.txt", 4L, "text/plain", "local-snapshot", taskId, null, null,
+                java.time.Instant.now(), null);
     }
 
     private static class ManualTaskExecutor implements TaskExecutor {

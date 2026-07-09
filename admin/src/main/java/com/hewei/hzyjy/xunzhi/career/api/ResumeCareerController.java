@@ -10,6 +10,7 @@ import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeEmbeddingResult;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeParseTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeUploadResult;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.common.convention.annotation.CurrentUser;
@@ -58,6 +59,35 @@ public class ResumeCareerController {
             @RequestPart("resume") MultipartFile resume,
             @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.upload(currentUser.getUserId(), resume));
+    }
+
+    @PostMapping(value = "/resumes/upload-async", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Result<ResumeParseTaskResult> uploadAsync(
+            @RequestPart("resume") MultipartFile resume,
+            @RequestPart(value = "cvType", required = false) String cvType,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.uploadAsync(currentUser.getUserId(), resume, cvType));
+    }
+
+    @GetMapping("/resumes/parse-tasks/{taskId}")
+    public Result<ResumeParseTaskResult> getParseTask(
+            @PathVariable String taskId,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.getParseTask(currentUser.getUserId(), taskId));
+    }
+
+    @PostMapping("/resumes/parse-tasks/{taskId}/cancel")
+    public Result<ResumeParseTaskResult> cancelParseTask(
+            @PathVariable String taskId,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.cancelParseTask(currentUser.getUserId(), taskId));
+    }
+
+    @PostMapping("/resumes/parse-tasks/{taskId}/retry")
+    public Result<ResumeParseTaskResult> retryParseTask(
+            @PathVariable String taskId,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.retryParseTask(currentUser.getUserId(), taskId));
     }
 
     @PostMapping("/resumes/{resumeId}/embedding")

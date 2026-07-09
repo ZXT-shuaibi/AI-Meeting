@@ -15,6 +15,9 @@
 
 - Structured resume aggregate `CvBO` and nested resume BOs are available.
 - Resume upload stores structured data through `ResumeStore` and triggers best-effort embedding immediately after save.
+- Async resume upload is available through `POST /api/xunzhi/v1/resumes/upload-async`, returning a parse `taskId` immediately while a background career executor runs parsing, saving, and best-effort embedding.
+- Resume parse tasks persist `PROCESSING/ANALYZING/SAVING/COMPLETED/FAILED/CANCELED` state, progress, owner scope, file metadata, retry lineage, and local snapshot/object-storage handoff metadata in `career_resume_parse_task`.
+- Parse task status/cancel/retry APIs are owner-scoped: `GET /resumes/parse-tasks/{taskId}`, `POST /cancel`, and `POST /retry`.
 - Text-based PDF resume parsing is wired through PDFBox 3.x with `RandomAccessReadBuffer` + `Loader.loadPDF(buffer)`, bounded by page and extracted-text limits.
 - First-stage multi-format resume delivery is wired from `CvBO -> Markdown -> HTML -> PDF/DOCX` and exposed through `GET /api/xunzhi/v1/resumes/{resumeId}/render/{format}` with owner-scoped lookup.
 - Resume rendering supports `markdown/html/pdf/docx` downloads. Markdown/HTML/DOCX preserve full structured resume content; PDF generation uses PDFBox with system CJK-font preference and character-level glyph fallback so missing fonts do not break delivery.
@@ -84,7 +87,7 @@
 The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, `skills/question-probing`, and the supplemental pasted JobSpark notes. Items marked "not fully fused" should not be claimed as complete resume highlights yet.
 
 1. Multi-format resume rendering is first-stage fused, but not yet at full JobSpark fidelity. AI-Meeting now has an end-to-end owner-scoped render API for Markdown/HTML/PDF/DOCX, but it does not yet migrate JobSpark's FreeMarker template validation, CommonMark extension stack, openhtmltopdf CSS/PDF renderer, docx4j XHTML import, or configurable font/template profiles.
-2. JobSpark's async resume parsing task model is only partially fused. AI-Meeting upload currently parses and embeds inside the request/service flow with bounded files; it does not yet expose JobSpark-style persistent parse task status, cancel/retry, OSS-first file handoff, or resumable async parsing for long-running uploads.
+2. JobSpark's async resume parsing task model is first-stage fused. AI-Meeting now exposes persistent parse task status, cancel, retry, progress, owner isolation, and local snapshot/object-storage handoff metadata, but it does not yet integrate a real OSS client/upload pipeline or cross-node queue worker recovery.
 3. JobSpark Skill runtime is not fully fused. The `jd-alignment` and `question-probing` Markdown skills are reflected in prompts/tests, but there is no runtime `activate_skill`/tool-provider bridge that loads these skill files as callable tools for Agentic agents.
 4. `JavaTechInterviewerAgent` is not fully fused as a real Agentic question generator. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's interview agents are intentionally limited to planning/reflection decisions for now.
 5. Observability is not yet universal across every legacy AI path. Career Agent events and tool executions are unified, but full automatic tracing still requires wiring all legacy Spring AI and Xunfei call sites into `AiTracePublisher`.
@@ -93,12 +96,12 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 
 ## Next Fusion Order
 
-1. Add persistent async resume parse tasks with task status/cancel/retry and object-storage handoff, because it turns upload/parse into a high-availability backend story.
-2. Upgrade first-stage rendering to JobSpark-level high-fidelity templates if needed: FreeMarker/CommonMark/openhtmltopdf/docx4j plus configurable fonts and template validation.
-3. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
-4. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
-5. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
-6. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
+1. Upgrade first-stage rendering to JobSpark-level high-fidelity templates if needed: FreeMarker/CommonMark/openhtmltopdf/docx4j plus configurable fonts and template validation.
+2. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
+3. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
+4. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
+5. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
+6. Add real OSS upload/download integration for async parse task handoff if multi-node file processing is required.
 
 ## Remaining Limitations
 
@@ -106,7 +109,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- High-fidelity template rendering, persistent async parse task cancellation, runtime Markdown Skill activation, and scanned-PDF OCR remain open follow-up migrations.
+- High-fidelity template rendering, real OSS-backed async file handoff, runtime Markdown Skill activation, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 
@@ -129,5 +132,6 @@ mvn.cmd -pl admin "-Dtest=AiCvReviewerTest,InterviewPlanningServiceTest,Bm25Scor
 mvn.cmd -pl admin -Pcareer-external-ai "-Dtest=AgenticCvOptimizationRuntimeIT,AgenticCvOptimizationSpringWiringIT,LangChain4jHybridMemoryAdapterIT,AgenticInterviewPlanningSpringWiringIT,InterviewPlanningServiceTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=ResumePdfTextExtractorTest,ResumeApplicationServiceTest,LangChain4jAgentAdapterTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=ResumeRenderServiceTest,ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin "-Dtest=ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -DskipTests "-Denforcer.skip=true" compile
 ```

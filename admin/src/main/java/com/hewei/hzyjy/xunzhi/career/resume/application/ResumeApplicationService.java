@@ -17,9 +17,10 @@ import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -27,6 +28,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
@@ -44,7 +46,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ResumeApplicationService {
 
     private static final Pattern XML_TAG = Pattern.compile("<[^>]+>");
@@ -60,6 +61,7 @@ public class ResumeApplicationService {
 
     private final ResumeStore resumeStore;
     private final JobMatchTaskStore jobMatchTaskStore;
+    private final ResumeParseTaskStore resumeParseTaskStore;
     private final ResumeRagService resumeRagService;
     private final CvOptimizationOrchestrator cvOptimizationOrchestrator;
     private final InterviewPlanningService interviewPlanningService;
@@ -68,8 +70,38 @@ public class ResumeApplicationService {
     private final ResumeStructuringService resumeStructuringService;
     private final ResumePdfTextExtractor resumePdfTextExtractor;
     private final ResumeRenderService resumeRenderService;
+    private final TaskExecutor careerTaskExecutor;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
+
+    public ResumeApplicationService(
+            ResumeStore resumeStore,
+            JobMatchTaskStore jobMatchTaskStore,
+            ResumeParseTaskStore resumeParseTaskStore,
+            ResumeRagService resumeRagService,
+            CvOptimizationOrchestrator cvOptimizationOrchestrator,
+            InterviewPlanningService interviewPlanningService,
+            CareerInterviewExecutionBridge interviewExecutionBridge,
+            HybridCompactingChatMemory chatMemory,
+            ResumeStructuringService resumeStructuringService,
+            ResumePdfTextExtractor resumePdfTextExtractor,
+            ResumeRenderService resumeRenderService,
+            @Qualifier("careerTaskExecutor") TaskExecutor careerTaskExecutor,
+            ObjectProvider<AiTracePublisher> tracePublisherProvider) {
+        this.resumeStore = resumeStore;
+        this.jobMatchTaskStore = jobMatchTaskStore;
+        this.resumeParseTaskStore = resumeParseTaskStore;
+        this.resumeRagService = resumeRagService;
+        this.cvOptimizationOrchestrator = cvOptimizationOrchestrator;
+        this.interviewPlanningService = interviewPlanningService;
+        this.interviewExecutionBridge = interviewExecutionBridge;
+        this.chatMemory = chatMemory;
+        this.resumeStructuringService = resumeStructuringService;
+        this.resumePdfTextExtractor = resumePdfTextExtractor;
+        this.resumeRenderService = resumeRenderService;
+        this.careerTaskExecutor = careerTaskExecutor;
+        this.tracePublisherProvider = tracePublisherProvider;
+    }
 
     public ResumeUploadResult upload(Long userId, MultipartFile file) {
         long start = System.currentTimeMillis();
@@ -188,6 +220,71 @@ public class ResumeApplicationService {
         return result;
     }
 
+    public ResumeParseTaskResult uploadAsync(Long userId, MultipartFile file, String cvType) {
+        validateUpload(file);
+        String taskId = UUID.randomUUID().toString();
+        byte[] snapshot = readFileSnapshot(file);
+        Instant now = Instant.now();
+        ResumeParseTaskRecord task = new ResumeParseTaskRecord(
+                taskId,
+                userId,
+                ResumeParseTaskStatus.PROCESSING,
+                null,
+                safeFilename(file),
+                file.getSize(),
+                file.getContentType(),
+                StringUtils.hasText(cvType) ? cvType : "upload",
+                "local-snapshot",
+                taskId,
+                null,
+                snapshot,
+                null,
+                null,
+                now,
+                null,
+                now,
+                now
+        );
+        resumeParseTaskStore.save(task);
+        careerTaskExecutor.execute(() -> processParseTask(taskId));
+        return toParseTaskResult(task);
+    }
+
+    public ResumeParseTaskResult getParseTask(Long userId, String taskId) {
+        return resumeParseTaskStore.findByTaskIdAndUserId(taskId, userId)
+                .map(this::toParseTaskResult)
+                .orElseGet(() -> ResumeParseTaskResult.notFound(taskId));
+    }
+
+    public List<ResumeParseTaskResult> listParseTasks(Long userId, String status) {
+        return resumeParseTaskStore.findByUserId(userId, status).stream()
+                .map(this::toParseTaskResult)
+                .toList();
+    }
+
+    public ResumeParseTaskResult cancelParseTask(Long userId, String taskId) {
+        ResumeParseTaskRecord task = resumeParseTaskStore.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Resume parse task not found or not owned by current user: " + taskId));
+        if (task.status().terminal()) {
+            return toParseTaskResult(task);
+        }
+        ResumeParseTaskRecord canceled = task.withStatus(ResumeParseTaskStatus.CANCELED);
+        resumeParseTaskStore.save(canceled);
+        return toParseTaskResult(canceled);
+    }
+
+    public ResumeParseTaskResult retryParseTask(Long userId, String taskId) {
+        ResumeParseTaskRecord source = resumeParseTaskStore.findByTaskIdAndUserId(taskId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("Resume parse task not found or not owned by current user: " + taskId));
+        if (source.status() != ResumeParseTaskStatus.FAILED) {
+            throw new IllegalArgumentException("Only FAILED resume parse tasks can be retried: " + taskId);
+        }
+        ResumeParseTaskRecord retry = source.retry(UUID.randomUUID().toString());
+        resumeParseTaskStore.save(retry);
+        careerTaskExecutor.execute(() -> processParseTask(retry.taskId()));
+        return toParseTaskResult(retry);
+    }
+
     public ResumeRenderArtifact renderResume(Long userId, Long resumeId, String format) {
         CvBO cv = getResume(userId, resumeId);
         String normalized = format == null ? "" : format.trim().toLowerCase();
@@ -205,6 +302,42 @@ public class ResumeApplicationService {
     private ResumeEmbeddingResult embeddingOwned(Long userId, Long resumeId, boolean failOnError) {
         CvBO cv = getResume(userId, resumeId);
         return doEmbedding(cv, failOnError);
+    }
+
+    private void processParseTask(String taskId) {
+        ResumeParseTaskRecord task = resumeParseTaskStore.findByTaskId(taskId).orElse(null);
+        if (task == null || task.status() == ResumeParseTaskStatus.CANCELED) {
+            return;
+        }
+        try {
+            task = task.withStatus(ResumeParseTaskStatus.ANALYZING);
+            resumeParseTaskStore.save(task);
+            CvBO parsed = parseUpload(task.userId(), multipartFromTask(task));
+            if (isCanceled(taskId, task.userId())) {
+                return;
+            }
+            task = task.withStatus(ResumeParseTaskStatus.SAVING);
+            resumeParseTaskStore.save(task);
+            CvBO saved = resumeStore.save(parsed.toBuilder()
+                    .userId(task.userId())
+                    .cvType(StringUtils.hasText(task.cvType()) ? task.cvType() : "upload")
+                    .build());
+            doEmbedding(saved, false);
+            resumeParseTaskStore.save(task.completed(saved.getId()));
+        } catch (Exception ex) {
+            ResumeParseTaskRecord latest = resumeParseTaskStore.findByTaskId(taskId).orElse(task);
+            if (latest != null && latest.status() == ResumeParseTaskStatus.CANCELED) {
+                return;
+            }
+            ResumeParseTaskRecord failed = (latest == null ? task : latest).failed(ex.getMessage());
+            resumeParseTaskStore.save(failed);
+        }
+    }
+
+    private boolean isCanceled(String taskId, Long userId) {
+        return resumeParseTaskStore.findByTaskIdAndUserId(taskId, userId)
+                .map(task -> task.status() == ResumeParseTaskStatus.CANCELED)
+                .orElse(true);
     }
 
     private ResumeEmbeddingResult doEmbedding(CvBO cv, boolean failOnError) {
@@ -279,6 +412,18 @@ public class ResumeApplicationService {
                 .summary(summary)
                 .skills(inferSkills(summary))
                 .build();
+    }
+
+    private MultipartFile multipartFromTask(ResumeParseTaskRecord task) {
+        return new SnapshotMultipartFile(task.originalFilename(), task.contentType(), task.fileSnapshot());
+    }
+
+    private byte[] readFileSnapshot(MultipartFile file) {
+        try {
+            return file.getBytes();
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Resume file snapshot failed: " + ex.getMessage(), ex);
+        }
     }
 
     private void validateUpload(MultipartFile file) {
@@ -465,6 +610,94 @@ public class ResumeApplicationService {
     private String safeFilename(MultipartFile file) {
         String name = file == null ? null : file.getOriginalFilename();
         return StringUtils.hasText(name) ? name : "uploaded-resume";
+    }
+
+    private ResumeParseTaskResult toParseTaskResult(ResumeParseTaskRecord task) {
+        return new ResumeParseTaskResult(
+                task.taskId(),
+                task.userId(),
+                task.status().name(),
+                task.status().message(),
+                parseProgress(task),
+                estimatedRemainingSeconds(task),
+                task.resumeId(),
+                task.originalFilename(),
+                task.fileSize(),
+                task.contentType(),
+                task.storageProvider(),
+                task.storageKey(),
+                task.retryOfTaskId(),
+                task.errorMessage(),
+                task.startTime(),
+                task.completeTime()
+        );
+    }
+
+    private int parseProgress(ResumeParseTaskRecord task) {
+        return switch (task.status()) {
+            case PROCESSING -> 5;
+            case ANALYZING -> 35;
+            case SAVING -> 85;
+            case COMPLETED -> 100;
+            case FAILED, CANCELED -> 0;
+        };
+    }
+
+    private Long estimatedRemainingSeconds(ResumeParseTaskRecord task) {
+        return switch (task.status()) {
+            case PROCESSING -> 65L;
+            case ANALYZING -> 30L;
+            case SAVING -> 5L;
+            case COMPLETED, FAILED, CANCELED -> null;
+        };
+    }
+
+    private record SnapshotMultipartFile(String originalFilename, String contentType, byte[] bytes) implements MultipartFile {
+        private SnapshotMultipartFile {
+            bytes = bytes == null ? new byte[0] : bytes.clone();
+        }
+
+        @Override
+        public String getName() {
+            return "resume";
+        }
+
+        @Override
+        public String getOriginalFilename() {
+            return originalFilename;
+        }
+
+        @Override
+        public String getContentType() {
+            return contentType;
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return bytes.length == 0;
+        }
+
+        @Override
+        public long getSize() {
+            return bytes.length;
+        }
+
+        @Override
+        public byte[] getBytes() {
+            return bytes.clone();
+        }
+
+        @Override
+        public InputStream getInputStream() {
+            return new ByteArrayInputStream(bytes);
+        }
+
+        @Override
+        public void transferTo(File dest) throws java.io.IOException {
+            try (FileOutputStream output = new FileOutputStream(dest)) {
+                output.write(bytes);
+            }
+        }
     }
 
     private String extension(String filename) {

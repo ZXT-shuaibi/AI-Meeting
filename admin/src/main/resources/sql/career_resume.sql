@@ -136,3 +136,31 @@ CREATE TABLE IF NOT EXISTS `career_job_match_task` (
   KEY `idx_user_task` (`user_id`, `task_id`),
   KEY `idx_status_update` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career JD-resume match task';
+
+CREATE TABLE IF NOT EXISTS `career_resume_parse_task` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `task_id` varchar(64) NOT NULL COMMENT 'Task id',
+  `user_id` bigint DEFAULT NULL COMMENT 'User id',
+  `status` varchar(32) NOT NULL COMMENT 'PROCESSING/ANALYZING/SAVING/COMPLETED/FAILED/CANCELED',
+  `resume_id` bigint DEFAULT NULL COMMENT 'Completed resume id',
+  `original_filename` varchar(255) DEFAULT NULL COMMENT 'Original upload filename',
+  `file_size` bigint DEFAULT NULL COMMENT 'Upload file size',
+  `content_type` varchar(128) DEFAULT NULL COMMENT 'Upload content type',
+  `cv_type` varchar(32) DEFAULT 'upload' COMMENT 'upload/excellent',
+  `storage_provider` varchar(64) DEFAULT NULL COMMENT 'local-snapshot/oss',
+  `storage_key` varchar(255) DEFAULT NULL COMMENT 'Object storage key or task snapshot key',
+  `file_path` varchar(512) DEFAULT NULL COMMENT 'Object storage path',
+  `file_snapshot` mediumblob COMMENT 'Bounded local file snapshot for retry/fallback',
+  `retry_of_task_id` varchar(64) DEFAULT NULL COMMENT 'Source task id when retrying',
+  `error_message` text COMMENT 'Failure reason',
+  `start_time` datetime DEFAULT NULL COMMENT 'Task start time',
+  `complete_time` datetime DEFAULT NULL COMMENT 'Task complete time',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_task_id` (`task_id`),
+  KEY `idx_user_task` (`user_id`, `task_id`),
+  KEY `idx_user_status_update` (`user_id`, `status`, `update_time`),
+  KEY `idx_retry_of_task` (`retry_of_task_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career async resume parse task';

@@ -21,6 +21,7 @@ import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.ByteArrayOutputStream;
@@ -28,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.ArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -248,6 +250,111 @@ class ResumeApplicationServiceTest {
         verify(renderService, never()).render(any());
     }
 
+    @Test
+    void uploadAsyncCreatesProcessingTaskAndDefersParsingUntilExecutorRuns() {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        ResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        ResumeApplicationService service = service(
+                store,
+                ragService,
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("async-cv").summary(text).build(),
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor
+        );
+        MockMultipartFile file = new MockMultipartFile(
+                "resume",
+                "resume.txt",
+                "text/plain",
+                "Java Redis async resume".getBytes(StandardCharsets.UTF_8)
+        );
+
+        ResumeParseTaskResult created = service.uploadAsync(7L, file, "upload");
+        ResumeParseTaskResult beforeRun = service.getParseTask(7L, created.taskId());
+
+        assertEquals(ResumeParseTaskStatus.PROCESSING.name(), beforeRun.status());
+        assertEquals(5, beforeRun.progress());
+        assertEquals(1, taskExecutor.tasks.size());
+        verify(store, never()).save(any());
+
+        when(store.save(any())).thenAnswer(invocation -> ((CvBO) invocation.getArgument(0)).toBuilder().id(31L).userId(7L).build());
+        when(store.findByIdAndUserId(31L, 7L)).thenReturn(Optional.of(CvBO.builder().id(31L).userId(7L).name("async-cv").summary("Java Redis async resume").build()));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+        taskExecutor.runNext();
+
+        ResumeParseTaskResult completed = service.getParseTask(7L, created.taskId());
+        assertEquals(ResumeParseTaskStatus.COMPLETED.name(), completed.status());
+        assertEquals(100, completed.progress());
+        assertEquals(31L, completed.resumeId());
+        verify(store).save(any());
+    }
+
+    @Test
+    void cancelAsyncParseTaskPreventsQueuedExecution() {
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeApplicationService service = service(
+                store,
+                mock(ResumeRagService.class),
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("cancelled").summary(text).build(),
+                new ResumeRenderService(),
+                new InMemoryResumeParseTaskStore(),
+                taskExecutor
+        );
+        MockMultipartFile file = new MockMultipartFile("resume", "resume.txt", "text/plain", "Java".getBytes(StandardCharsets.UTF_8));
+
+        ResumeParseTaskResult created = service.uploadAsync(7L, file, "upload");
+        ResumeParseTaskResult canceled = service.cancelParseTask(7L, created.taskId());
+        taskExecutor.runNext();
+        ResumeParseTaskResult afterWorker = service.getParseTask(7L, created.taskId());
+
+        assertEquals(ResumeParseTaskStatus.CANCELED.name(), canceled.status());
+        assertEquals(ResumeParseTaskStatus.CANCELED.name(), afterWorker.status());
+        verify(store, never()).save(any());
+    }
+
+    @Test
+    void retryFailedAsyncParseTaskCreatesNewQueuedTaskFromStoredSnapshot() {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        ResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        ResumeApplicationService service = service(
+                store,
+                ragService,
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> {
+                    throw new IllegalStateException("parser down");
+                },
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor
+        );
+        MockMultipartFile file = new MockMultipartFile("resume", "resume.txt", "text/plain", "Java".getBytes(StandardCharsets.UTF_8));
+        ResumeParseTaskResult failedSource = service.uploadAsync(7L, file, "upload");
+        taskExecutor.runNext();
+        assertEquals(ResumeParseTaskStatus.FAILED.name(), service.getParseTask(7L, failedSource.taskId()).status());
+
+        ResumeApplicationService retryService = service(
+                store,
+                ragService,
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("retry-cv").summary(text).build(),
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor
+        );
+        ResumeParseTaskResult retried = retryService.retryParseTask(7L, failedSource.taskId());
+
+        assertEquals(ResumeParseTaskStatus.PROCESSING.name(), retried.status());
+        assertEquals(failedSource.taskId(), retried.retryOfTaskId());
+        assertEquals(1, taskExecutor.tasks.size());
+    }
+
     private ResumeApplicationService service(ResumeStore store, ResumeRagService ragService, CvOptimizationOrchestrator orchestrator) {
         return service(store, ragService, orchestrator, (userId, filename, text) -> null);
     }
@@ -274,9 +381,29 @@ class ResumeApplicationServiceTest {
             CvOptimizationOrchestrator orchestrator,
             ResumeStructuringService structuringService,
             ResumeRenderService renderService) {
+        return service(
+                store,
+                ragService,
+                orchestrator,
+                structuringService,
+                renderService,
+                new InMemoryResumeParseTaskStore(),
+                Runnable::run
+        );
+    }
+
+    private ResumeApplicationService service(
+            ResumeStore store,
+            ResumeRagService ragService,
+            CvOptimizationOrchestrator orchestrator,
+            ResumeStructuringService structuringService,
+            ResumeRenderService renderService,
+            ResumeParseTaskStore parseTaskStore,
+            TaskExecutor taskExecutor) {
         return new ResumeApplicationService(
                 store,
                 mock(JobMatchTaskStore.class),
+                parseTaskStore,
                 ragService,
                 orchestrator,
                 mock(InterviewPlanningService.class),
@@ -285,8 +412,22 @@ class ResumeApplicationServiceTest {
                 structuringService,
                 new ResumePdfTextExtractor(),
                 renderService,
+                taskExecutor,
                 emptyProvider()
         );
+    }
+
+    private static class ManualTaskExecutor implements TaskExecutor {
+        private final List<Runnable> tasks = new ArrayList<>();
+
+        @Override
+        public void execute(Runnable task) {
+            tasks.add(task);
+        }
+
+        void runNext() {
+            tasks.remove(0).run();
+        }
     }
 
     private byte[] minimalDocx(String text) throws Exception {
