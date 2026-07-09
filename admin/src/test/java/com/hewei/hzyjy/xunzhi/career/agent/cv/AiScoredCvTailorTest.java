@@ -2,7 +2,11 @@ package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
+import com.hewei.hzyjy.xunzhi.career.resume.model.ContactBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.ExperienceBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.ProjectBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.skill.CareerSkill;
 import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import com.hewei.hzyjy.xunzhi.career.skill.ClasspathCareerSkillRegistry;
@@ -14,6 +18,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AiScoredCvTailorTest {
@@ -78,5 +83,118 @@ class AiScoredCvTailorTest {
         assertTrue(captured.get().systemPrompt().contains("CvBO"));
         assertTrue(captured.get().systemPrompt().contains("LocaleConfig.sectionLabels"));
         assertTrue(captured.get().systemPrompt().contains("yyyy-MM-dd"));
+    }
+
+    @Test
+    void appliesFullCvStructureWhenSpringAiReturnsWholeCvJson() {
+        CvBO original = CvBO.builder()
+                .title("Old title")
+                .summary("Old summary")
+                .advice("Old advice")
+                .contact(ContactBO.builder().email("old@example.com").build())
+                .skills(List.of(SkillBO.builder().name("Java").level("experienced").build()))
+                .experiences(List.of(ExperienceBO.builder().company("Old Co").role("Engineer").description("legacy").build()))
+                .projects(List.of(ProjectBO.builder().name("Legacy Project").description("legacy").build()))
+                .build();
+        AiScoredCvTailor tailor = new AiScoredCvTailor(request -> AiGatewayResult.builder()
+                .content("""
+                        {
+                          "title":"Java Backend Engineer",
+                          "summary":"Tailored summary",
+                          "advice":"Keep impact metrics.",
+                          "contact":{"email":"new@example.com"},
+                          "skills":[{"name":"Spring Boot","level":"advanced"}],
+                          "experiences":[{"company":"New Co","role":"Senior Engineer","description":"built platform"}],
+                          "projects":[{"name":"AI Resume","description":"rebuilt optimization chain"}]
+                        }
+                        """)
+                .provider("test")
+                .build());
+
+        CvBO tailored = tailor.tailor(original, new CvReview(0.82, "Add stronger metrics."), List.of("template"));
+
+        assertEquals("Java Backend Engineer", tailored.getTitle());
+        assertEquals("Tailored summary", tailored.getSummary());
+        assertEquals("new@example.com", tailored.getContact().getEmail());
+        assertEquals(1, tailored.getSkills().size());
+        assertEquals("Spring Boot", tailored.getSkills().get(0).getName());
+        assertEquals("New Co", tailored.getExperiences().get(0).getCompany());
+        assertEquals("AI Resume", tailored.getProjects().get(0).getName());
+        assertTrue(tailored.getAdvice().contains("Add stronger metrics."));
+        assertTrue(tailored.getAdvice().contains("Keep impact metrics."));
+    }
+
+    @Test
+    void prefersStructuredLangChain4jCvWhenGatewayReturnsCvObject() {
+        CvBO original = CvBO.builder()
+                .title("Old title")
+                .summary("Old summary")
+                .build();
+        CvBO gatewayCv = CvBO.builder()
+                .title("Gateway title")
+                .summary("Gateway summary")
+                .contact(ContactBO.builder().email("gateway@example.com").build())
+                .skills(List.of(SkillBO.builder().name("LangChain4j").level("advanced").build()))
+                .build();
+        AiScoredCvTailor tailor = new AiScoredCvTailor(
+                request -> {
+                    throw new AssertionError("Spring AI fallback should not be used when gateway returns CvBO");
+                },
+                new org.springframework.beans.factory.ObjectProvider<>() {
+                    @Override
+                    public com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway getObject(Object... args) {
+                        return getObject();
+                    }
+
+                    @Override
+                    public com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway getIfAvailable() {
+                        return getObject();
+                    }
+
+                    @Override
+                    public com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway getIfUnique() {
+                        return getObject();
+                    }
+
+                    @Override
+                    public com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway getObject() {
+                        return new com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway() {
+                            @Override
+                            public <T> T invoke(String agentName, String methodName, Map<String, Object> variables, Class<T> responseType) {
+                                return responseType.cast(gatewayCv);
+                            }
+                        };
+                    }
+                },
+                new org.springframework.beans.factory.ObjectProvider<>() {
+                    @Override
+                    public CareerSkillRegistry getObject(Object... args) {
+                        return CareerSkillRegistry.disabled();
+                    }
+
+                    @Override
+                    public CareerSkillRegistry getIfAvailable() {
+                        return CareerSkillRegistry.disabled();
+                    }
+
+                    @Override
+                    public CareerSkillRegistry getIfUnique() {
+                        return CareerSkillRegistry.disabled();
+                    }
+
+                    @Override
+                    public CareerSkillRegistry getObject() {
+                        return CareerSkillRegistry.disabled();
+                    }
+                });
+
+        CvBO tailored = tailor.tailor(original, new CvReview(0.9, "Great match."), List.of());
+
+        assertEquals("Gateway title", tailored.getTitle());
+        assertEquals("Gateway summary", tailored.getSummary());
+        assertNotNull(tailored.getContact());
+        assertEquals("gateway@example.com", tailored.getContact().getEmail());
+        assertEquals("LangChain4j", tailored.getSkills().get(0).getName());
+        assertTrue(tailored.getAdvice().contains("Great match."));
     }
 }

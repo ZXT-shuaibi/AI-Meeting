@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.hewei.hzyjy.xunzhi.career.agent.support.AgentResponseParser;
 import com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway;
@@ -47,7 +48,11 @@ public class AiScoredCvTailor implements ScoredCvTailor {
 
     @Override
     public CvBO tailor(CvBO cv, CvReview review, List<String> referenceTemplates) {
-        String response = tryLangChain4j(cv, review, referenceTemplates);
+        CvBO gatewayCv = tryLangChain4jCv(cv, review, referenceTemplates);
+        if (gatewayCv != null) {
+            return finalizeTailoredCv(cv, review, gatewayCv, null);
+        }
+        String response = tryLangChain4jText(cv, review, referenceTemplates);
         if (response == null || response.isBlank()) {
             response = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("RESUME_TAILOR")
@@ -55,11 +60,15 @@ public class AiScoredCvTailor implements ScoredCvTailor {
                     .userPrompt(CvPromptTemplates.tailorUserPrompt(cv, review, referenceTemplates))
                     .build()).content();
         }
+        CvBO parsedCv = parseStructuredCv(response);
+        if (parsedCv != null) {
+            return finalizeTailoredCv(cv, review, parsedCv, response);
+        }
         JSONObject json = AgentResponseParser.jsonObject(response).orElse(null);
         String title = json == null ? null : json.getString("title");
         String summary = json == null ? null : json.getString("summary");
         String advice = json == null ? response : firstNonBlank(json.getString("advice"), json.getString("feedback"), response);
-        String mergedAdvice = review.feedback() + "\n\nTailor advice:\n" + advice;
+        String mergedAdvice = mergeAdvice(review, advice);
         return cv.toBuilder()
                 .title(firstNonBlank(title, cv.getTitle()))
                 .advice(mergedAdvice)
@@ -67,7 +76,24 @@ public class AiScoredCvTailor implements ScoredCvTailor {
                 .build();
     }
 
-    private String tryLangChain4j(CvBO cv, CvReview review, List<String> referenceTemplates) {
+    private CvBO tryLangChain4jCv(CvBO cv, CvReview review, List<String> referenceTemplates) {
+        AgentRuntimeGateway gateway = agentRuntimeGatewayProvider == null ? null : agentRuntimeGatewayProvider.getIfAvailable();
+        if (gateway == null) {
+            return null;
+        }
+        try {
+            return gateway.invoke("ScoredCvTailor", "tailor", Map.of(
+                    "cv", cv,
+                    "cvReview", review,
+                    "referenceTemplates", referenceTemplates == null ? List.of() : referenceTemplates
+            ), CvBO.class);
+        } catch (Exception ex) {
+            log.debug("LangChain4j ScoredCvTailor structured CvBO unavailable, falling back to text response", ex);
+            return null;
+        }
+    }
+
+    private String tryLangChain4jText(CvBO cv, CvReview review, List<String> referenceTemplates) {
         AgentRuntimeGateway gateway = agentRuntimeGatewayProvider == null ? null : agentRuntimeGatewayProvider.getIfAvailable();
         if (gateway == null) {
             return null;
@@ -82,6 +108,58 @@ public class AiScoredCvTailor implements ScoredCvTailor {
             log.debug("LangChain4j ScoredCvTailor unavailable, falling back to Spring AI", ex);
             return null;
         }
+    }
+
+    private CvBO parseStructuredCv(String response) {
+        if (response == null || response.isBlank()) {
+            return null;
+        }
+        String candidate = AgentResponseParser.jsonObject(response)
+                .map(JSONObject::toString)
+                .orElse(null);
+        if (candidate == null || candidate.isBlank()) {
+            return null;
+        }
+        try {
+            return JSON.parseObject(candidate, CvBO.class);
+        } catch (Exception ex) {
+            log.debug("Failed to parse tailored CvBO from response", ex);
+            return null;
+        }
+    }
+
+    private CvBO finalizeTailoredCv(CvBO original, CvReview review, CvBO tailored, String rawResponse) {
+        if (tailored == null) {
+            return original;
+        }
+        String adviceFromTailor = firstNonBlank(
+                tailored.getAdvice(),
+                AgentResponseParser.feedback(rawResponse).orElse(null),
+                rawResponse
+        );
+        return tailored.toBuilder()
+                .id(original == null ? null : original.getId())
+                .userId(original == null ? null : original.getUserId())
+                .cvType(firstNonBlank(tailored.getCvType(), original == null ? null : original.getCvType()))
+                .name(firstNonBlank(tailored.getName(), original == null ? null : original.getName()))
+                .birthDate(tailored.getBirthDate() != null ? tailored.getBirthDate() : original == null ? null : original.getBirthDate())
+                .avatarUrl(firstNonBlank(tailored.getAvatarUrl(), original == null ? null : original.getAvatarUrl()))
+                .advice(mergeAdvice(review, adviceFromTailor))
+                .summary(firstNonBlank(tailored.getSummary(), mergeSummary(original == null ? null : original.getSummary(), review.feedback())))
+                .optimizationHistory(original == null ? tailored.getOptimizationHistory() : original.getOptimizationHistory())
+                .build();
+    }
+
+    private String mergeAdvice(CvReview review, String tailorAdvice) {
+        String reviewFeedback = review == null ? null : review.feedback();
+        String safeTailorAdvice = firstNonBlank(tailorAdvice, reviewFeedback, "");
+        if (reviewFeedback == null || reviewFeedback.isBlank()) {
+            return safeTailorAdvice;
+        }
+        if (safeTailorAdvice == null || safeTailorAdvice.isBlank() || reviewFeedback.equals(safeTailorAdvice)) {
+            return reviewFeedback;
+        }
+        return reviewFeedback + "\n\nTailor advice:\n" + safeTailorAdvice;
     }
 
     private String mergeSummary(String summary, String feedback) {
