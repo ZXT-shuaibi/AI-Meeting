@@ -2,11 +2,13 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
+import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReview;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.CareerInterviewExecutionBridge;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlanningService;
 import com.hewei.hzyjy.xunzhi.career.memory.DecisionIndex;
 import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.InterviewRuleBasedScorer;
+import com.hewei.hzyjy.xunzhi.career.memory.MemoryMessage;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.ProjectBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
@@ -39,11 +41,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 
 class ResumeApplicationServiceTest {
 
@@ -55,8 +57,9 @@ class ResumeApplicationServiceTest {
         when(store.findByIdAndUserId(1L, 7L)).thenReturn(Optional.of(original));
         ResumeRagService ragService = mock(ResumeRagService.class);
         when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")))).thenReturn(List.of("template"));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
         CvOptimizationOrchestrator orchestrator = mock(CvOptimizationOrchestrator.class);
-        when(orchestrator.optimize(eq(original), eq("Java JD"), eq(List.of("template")), isNull()))
+        when(orchestrator.optimize(eq(original), eq("Java JD"), eq(List.of("template")), any()))
                 .thenReturn(CvOptimizationResult.builder()
                         .cv(draft)
                         .iterations(3)
@@ -70,6 +73,54 @@ class ResumeApplicationServiceTest {
 
         assertEquals("low score draft", result.cv().getSummary());
         verify(store, never()).save(any());
+    }
+
+    @Test
+    void optimizePersistsEachIterationIntoMemoryAndForwardsProgressCallback() {
+        CvBO original = CvBO.builder().id(1L).userId(7L).name("candidate").summary("original").build();
+        ResumeStore store = mock(ResumeStore.class);
+        when(store.findByIdAndUserId(1L, 7L)).thenReturn(Optional.of(original));
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")))).thenReturn(List.of("template"));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+        CvOptimizationOrchestrator orchestrator = mock(CvOptimizationOrchestrator.class);
+        CvReview first = new CvReview(0.72, "score 0.72, add quantified backend impact");
+        CvReview second = new CvReview(0.86, "score 0.86, ready for interview");
+        CvBO optimized = original.toBuilder()
+                .summary("optimized")
+                .advice(second.feedback())
+                .build();
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<CvReview> callback = invocation.getArgument(3);
+            callback.accept(first);
+            callback.accept(second);
+            return CvOptimizationResult.builder()
+                    .cv(optimized)
+                    .bestReview(second)
+                    .iterations(2)
+                    .scoreGatePassed(true)
+                    .reviewHistory(List.of(first, second))
+                    .build();
+        }).when(orchestrator).optimize(eq(original), eq("Java JD"), eq(List.of("template")), any());
+        HybridCompactingChatMemory chatMemory = new HybridCompactingChatMemory(
+                request -> null,
+                new InterviewRuleBasedScorer(),
+                new DecisionIndex()
+        );
+        ResumeApplicationService service = service(store, ragService, orchestrator, chatMemory);
+        List<CvReview> streamed = new ArrayList<>();
+
+        CvOptimizationResult result = service.optimize(7L, 1L, "Java JD", streamed::add);
+
+        assertEquals(List.of(first, second), streamed);
+        assertEquals(List.of(first, second), result.reviewHistory());
+        List<MemoryMessage> messages = chatMemory.messages("resume:1");
+        org.junit.jupiter.api.Assertions.assertTrue(messages.stream().anyMatch(message -> message.content().contains("Resume optimization iteration 1")));
+        org.junit.jupiter.api.Assertions.assertTrue(messages.stream().anyMatch(message -> message.content().contains("score=0.72")));
+        org.junit.jupiter.api.Assertions.assertTrue(messages.stream().anyMatch(message -> message.content().contains("Resume optimization iteration 2")));
+        org.junit.jupiter.api.Assertions.assertTrue(messages.stream().anyMatch(message -> message.content().contains("score=0.86")));
+        org.junit.jupiter.api.Assertions.assertTrue(messages.stream().anyMatch(message -> message.content().contains("Resume optimization decision: scoreGatePassed=true")));
     }
 
     @Test
@@ -541,6 +592,29 @@ class ResumeApplicationServiceTest {
 
     private ResumeApplicationService service(ResumeStore store, ResumeRagService ragService, CvOptimizationOrchestrator orchestrator) {
         return service(store, ragService, orchestrator, (userId, filename, text) -> null);
+    }
+
+    private ResumeApplicationService service(
+            ResumeStore store,
+            ResumeRagService ragService,
+            CvOptimizationOrchestrator orchestrator,
+            HybridCompactingChatMemory chatMemory) {
+        return new ResumeApplicationService(
+                store,
+                mock(JobMatchTaskStore.class),
+                new InMemoryResumeParseTaskStore(),
+                ragService,
+                orchestrator,
+                mock(InterviewPlanningService.class),
+                mock(CareerInterviewExecutionBridge.class),
+                chatMemory,
+                (userId, filename, text) -> null,
+                new ResumePdfTextExtractor(),
+                new ResumeRenderService(),
+                Runnable::run,
+                emptyProvider(),
+                ResumeObjectStorage.disabled()
+        );
     }
 
     private ResumeApplicationService service(

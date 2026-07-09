@@ -177,14 +177,34 @@ public class ResumeApplicationService {
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
         List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)));
-        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, progressCallback);
+        String resumeMemoryId = memoryId(resumeId);
+        final int[] iterationCounter = {0};
+        Consumer<CvReview> memoryAwareProgressCallback = review -> {
+            iterationCounter[0]++;
+            chatMemory.add(resumeMemoryId, MemoryMessage.builder()
+                    .role(MemoryRole.ASSISTANT)
+                    .content("Resume optimization iteration " + iterationCounter[0]
+                            + ": score=" + review.score()
+                            + ", feedback=" + review.feedback())
+                    .metadata(Map.of(
+                            "scene", "RESUME_TAILOR",
+                            "resumeId", String.valueOf(resumeId),
+                            "userId", String.valueOf(userId),
+                            "iteration", String.valueOf(iterationCounter[0])
+                    ))
+                    .build());
+            if (progressCallback != null) {
+                progressCallback.accept(review);
+            }
+        };
+        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, memoryAwareProgressCallback);
         CvBO latest = result.cv() == null ? cv : result.cv().toBuilder().id(resumeId).userId(userId).build();
         if (result.scoreGatePassed()) {
             resumeStore.save(latest);
             embeddedResumeIds.remove(resumeId);
             ensureResumeEmbedding(latest);
         }
-        chatMemory.add(memoryId(resumeId), MemoryMessage.builder()
+        chatMemory.add(resumeMemoryId, MemoryMessage.builder()
                 .role(MemoryRole.ASSISTANT)
                 .content("Resume optimization decision: scoreGatePassed=" + result.scoreGatePassed()
                         + ", iterations=" + result.iterations()
