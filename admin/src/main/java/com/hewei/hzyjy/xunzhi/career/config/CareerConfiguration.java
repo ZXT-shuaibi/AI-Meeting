@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.config;
 
+import com.hewei.hzyjy.xunzhi.career.resume.application.AliyunOssResumeObjectStorage;
 import com.hewei.hzyjy.xunzhi.career.resume.application.LocalResumeObjectStorage;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeObjectStorage;
 import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
@@ -37,6 +38,14 @@ public class CareerConfiguration {
         CareerStorageProperties.ObjectStorage objectStorage = properties.getObjectStorage();
         if (objectStorage == null || !objectStorage.isEnabled()) {
             return ResumeObjectStorage.disabled();
+        }
+        if ("aliyun-oss".equalsIgnoreCase(objectStorage.getProvider()) || "oss".equalsIgnoreCase(objectStorage.getProvider())) {
+            return new AliyunOssResumeObjectStorage(
+                    objectStorage.getEndpoint(),
+                    objectStorage.getRegion(),
+                    objectStorage.getBucketName(),
+                    objectStorage.getPublicBaseUrl()
+            );
         }
         return new LocalResumeObjectStorage(objectStorage.getProvider(), objectStorage.getBaseDir(), objectStorage.getPublicBaseUrl());
     }

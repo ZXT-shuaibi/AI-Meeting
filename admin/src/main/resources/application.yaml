@@ -135,6 +135,9 @@ xunzhi-agent:
         provider: ${XUNZHI_CAREER_OBJECT_STORAGE_PROVIDER:local}
         base-dir: ${XUNZHI_CAREER_OBJECT_STORAGE_BASE_DIR:${xunzhi-agent.storage.base-dir}/career/object-storage}
         public-base-url: ${XUNZHI_CAREER_OBJECT_STORAGE_PUBLIC_BASE_URL:}
+        endpoint: ${XUNZHI_CAREER_OBJECT_STORAGE_ENDPOINT:}
+        region: ${XUNZHI_CAREER_OBJECT_STORAGE_REGION:}
+        bucket-name: ${XUNZHI_CAREER_OBJECT_STORAGE_BUCKET_NAME:}
   security:
     require-xunfei-secrets: true
   storage:

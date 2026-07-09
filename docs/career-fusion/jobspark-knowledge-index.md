@@ -21,7 +21,7 @@ This directory captures the JobSpark-Resume knowledge assets after fusion into A
 - RAG maps to `ResumeRagService`, `QdrantResumeVectorStore`, BM25, RRF, DashScope rerank, and Redis cache.
 - Rendering maps to `CvRendererFacade`, `ResumeMarkdownService`, `PdfResumeRenderBackend`, and `DocxResumeRenderBackend`.
 - Async task state maps to `career_resume_parse_task`, `ResumeParseTaskStore`, and `ResumeApplicationService#uploadAsync`.
-- OSS handoff maps to `ResumeObjectStorage` with a built-in local backend; cloud OSS SDK remains a backend extension.
+- OSS handoff maps to `ResumeObjectStorage` with built-in local and Alibaba Cloud OSS backends; the Alibaba backend is reflectively loaded so the default build is not coupled to the cloud SDK.
 - Observability maps to `AiTracePublisher`, Spring events, Redis hot traces, and MySQL cold traces.
 - ThreadLocal NPE mitigation maps to `LangChain4jAgenticSafetyPolicy` and adapter-level failure unwrapping.
 
@@ -29,6 +29,6 @@ This directory captures the JobSpark-Resume knowledge assets after fusion into A
 
 - Runtime skill activation: the JobSpark skill markdown is documented and reflected in prompts, but not yet loaded as callable runtime tools.
 - JavaTechInterviewerAgent: still not a standalone Agentic question generator in AI-Meeting; AI-Meeting execution remains authoritative.
-- Cloud OSS backend: the adapter exists, but no Alibaba OSS SDK implementation is included in the default build.
+- Alibaba OSS backend: the backend exists and uses JobSpark's environment-credential/V4-signature pattern. The Alibaba SDK is still not included in the default build and must be added to deployments that enable `provider=aliyun-oss`.
 - High-fidelity rendering: AI-Meeting uses PDFBox/POI backends; openhtmltopdf/docx4j remains optional future parity work.
 - Scanned PDF OCR: text-based PDFBox extraction is implemented; image-only PDFs need an OCR service.

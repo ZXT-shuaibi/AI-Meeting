@@ -17,6 +17,7 @@ AI-Meeting uses:
 - `career_resume_parse_task` with owner-scoped task id, progress states, retry lineage, storage provider/key/path, and bounded snapshot fallback.
 - `ResumeObjectStorage` as the storage boundary.
 - `LocalResumeObjectStorage` as the built-in backend for OSS-style key/path handoff without cloud SDK dependency.
+- `AliyunOssResumeObjectStorage` as the cloud backend, following JobSpark's Alibaba OSS pattern with environment credentials, V4 signature, bucket auto-create, upload, and stream download.
 - MySQL-first parse task persistence with in-memory fallback.
 
 ## Current Behavior
@@ -52,9 +53,39 @@ $env:XUNZHI_CAREER_OBJECT_STORAGE_PROVIDER="local"
 $env:XUNZHI_CAREER_OBJECT_STORAGE_BASE_DIR="D:\data\xunzhi-career-object-storage"
 ```
 
+Enable Alibaba Cloud OSS:
+
+```yaml
+xunzhi-agent:
+  career:
+    storage:
+      object-storage:
+        enabled: true
+        provider: aliyun-oss
+        endpoint: oss-cn-beijing.aliyuncs.com
+        region: cn-beijing
+        bucket-name: xunzhi-resume
+        public-base-url: https://cdn.example.com/resume
+```
+
+Environment variables:
+
+```powershell
+$env:XUNZHI_CAREER_OBJECT_STORAGE_ENABLED="true"
+$env:XUNZHI_CAREER_OBJECT_STORAGE_PROVIDER="aliyun-oss"
+$env:XUNZHI_CAREER_OBJECT_STORAGE_ENDPOINT="oss-cn-beijing.aliyuncs.com"
+$env:XUNZHI_CAREER_OBJECT_STORAGE_REGION="cn-beijing"
+$env:XUNZHI_CAREER_OBJECT_STORAGE_BUCKET_NAME="xunzhi-resume"
+$env:XUNZHI_CAREER_OBJECT_STORAGE_PUBLIC_BASE_URL="https://cdn.example.com/resume"
+$env:OSS_ACCESS_KEY_ID="..."
+$env:OSS_ACCESS_KEY_SECRET="..."
+```
+
+The default build intentionally does not force the Alibaba OSS SDK into the Spring AI path. The backend loads `com.aliyun.oss:aliyun-sdk-oss` reflectively only when `provider=aliyun-oss` performs real IO, so deployments that enable this provider must place the SDK on the runtime classpath.
+
 ## Cloud OSS Backend Requirements
 
-A cloud backend should implement `ResumeObjectStorage` and preserve:
+Any additional cloud backend should implement `ResumeObjectStorage` and preserve:
 
 - Stable provider/key/path fields.
 - Stream-based download.
@@ -67,5 +98,6 @@ A cloud backend should implement `ResumeObjectStorage` and preserve:
 ## Known Limits
 
 - Local backend is not shared storage across nodes.
+- Alibaba OSS backend gives shared file handoff, but does not by itself provide queue-worker recovery after JVM death.
 - There is no queue-worker recovery scanner yet; if the JVM dies after task creation, a future worker repair task should requeue `PROCESSING/ANALYZING/SAVING` tasks that exceed a timeout.
 - There is no outbox guarantee for every degraded write.

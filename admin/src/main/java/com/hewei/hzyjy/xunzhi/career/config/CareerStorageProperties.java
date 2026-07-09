@@ -15,5 +15,8 @@ public class CareerStorageProperties {
         private String provider = "local";
         private String baseDir = "${user.home}/.xunzhi-agent/career/object-storage";
         private String publicBaseUrl = "";
+        private String endpoint = "";
+        private String region = "";
+        private String bucketName = "";
     }
 }
