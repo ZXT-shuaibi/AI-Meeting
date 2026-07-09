@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class InterviewPlanningService {
@@ -137,6 +138,27 @@ public class InterviewPlanningService {
     }
 
     private List<InterviewStagePlan> coordinateStages(String memoryId, JdAlignmentResult alignment) {
+        String response = aiGateway.chat(AiPromptRequest.builder()
+                .sceneCode("INTERVIEW_COORDINATION")
+                .sessionId(memoryId)
+                .systemPrompt("""
+                        Create a concise multi-stage interview plan and return JSON only:
+                        {"stages":[{"stageName":"...","goal":"...","questionSeeds":["..."]}]}.
+                        Keep stages focused on interview planning only.
+                        """
+                        + runtimeSkill("question-probing"))
+                .userPrompt(chatMemory.view(memoryId, 6).decisionContext()
+                        + "\nJD alignment:\n" + alignment)
+                .build()).content();
+        List<InterviewStagePlan> aiStages = parseStages(response);
+        if (!aiStages.isEmpty()) {
+            chatMemory.add(memoryId, MemoryMessage.builder()
+                    .role(MemoryRole.ASSISTANT)
+                    .content("Interview coordination stages: " + aiStages)
+                    .metadata(Map.of("scene", "INTERVIEW_COORDINATION"))
+                    .build());
+            return aiStages;
+        }
         List<String> matchedSeeds = alignment.matchedSkills().isEmpty()
                 ? List.of("project architecture", "backend fundamentals")
                 : alignment.matchedSkills();
@@ -166,6 +188,25 @@ public class InterviewPlanningService {
     }
 
     private String generateFirstQuestion(String memoryId, CvBO cv, String jobDescription, JdAlignmentResult alignment, List<InterviewStagePlan> stages) {
+        String response = aiGateway.chat(AiPromptRequest.builder()
+                .sceneCode("INTERVIEW_COORDINATION")
+                .sessionId(memoryId)
+                .systemPrompt("""
+                        Generate exactly one opening interview question and return JSON only:
+                        {"question":"...","rationale":"..."}.
+                        The question should be grounded in the JD alignment and current interview stages.
+                        """
+                        + runtimeSkill("question-probing"))
+                .userPrompt(chatMemory.view(memoryId, 6).decisionContext()
+                        + "\nCV:\n" + cv
+                        + "\n\nJD:\n" + jobDescription
+                        + "\n\nJD alignment:\n" + alignment
+                        + "\n\nStage plan:\n" + stages)
+                .build()).content();
+        String aiQuestion = parseQuestion(response);
+        if (!aiQuestion.isBlank()) {
+            return aiQuestion;
+        }
         String seed = alignment.matchedSkills().isEmpty() ? "your most relevant backend project" : alignment.matchedSkills().get(0);
         return "Please explain one project where you used " + seed + " and describe the architecture, your responsibility, and measurable impact.";
     }
@@ -192,6 +233,47 @@ public class InterviewPlanningService {
             return lower.contains("stage_finish") ? ReflectionDecision.STAGE_FINISH : ReflectionDecision.FINISH;
         }
         return score < 6 ? ReflectionDecision.PROBE : ReflectionDecision.NEXT;
+    }
+
+    private List<InterviewStagePlan> parseStages(String response) {
+        return AgentResponseParser.jsonObject(response)
+                .map(json -> json.getJSONArray("stages"))
+                .filter(array -> !array.isEmpty())
+                .map(array -> {
+                    List<InterviewStagePlan> stages = new ArrayList<>();
+                    for (int i = 0; i < array.size(); i++) {
+                        com.alibaba.fastjson2.JSONObject item = array.getJSONObject(i);
+                        if (item == null) {
+                            continue;
+                        }
+                        String stageName = safe(item.getString("stageName")).trim();
+                        String goal = safe(item.getString("goal")).trim();
+                        List<String> questionSeeds = Optional.ofNullable(item.getJSONArray("questionSeeds"))
+                                .map(values -> values.toList(String.class).stream()
+                                        .map(this::safe)
+                                        .map(String::trim)
+                                        .filter(value -> !value.isBlank())
+                                        .toList())
+                                .orElse(List.of());
+                        if (stageName.isBlank() || goal.isBlank() || questionSeeds.isEmpty()) {
+                            continue;
+                        }
+                        stages.add(InterviewStagePlan.builder()
+                                .stageName(stageName)
+                                .goal(goal)
+                                .questionSeeds(questionSeeds)
+                                .build());
+                    }
+                    return stages;
+                })
+                .orElse(List.of());
+    }
+
+    private String parseQuestion(String response) {
+        return AgentResponseParser.jsonObject(response)
+                .map(json -> safe(json.getString("question")).trim())
+                .filter(value -> !value.isBlank())
+                .orElse("");
     }
 
     private int heuristicAnswerScore(String userAnswer) {

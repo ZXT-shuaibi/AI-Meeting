@@ -57,15 +57,19 @@ class InterviewPlanningServiceTest {
     }
 
     @Test
-    void planningBuildsPlanWithoutAgentRuntimeGatewayAndKeepsSkillPromptAssembly() {
-        List<AiPromptRequest> requests = new ArrayList<>();
-        AiGateway aiGateway = request -> {
-            requests.add(request);
-            return AiGatewayResult.builder()
-                    .content("Spring AI alignment summary")
-                    .provider("test")
-                    .build();
-        };
+    void planningUsesSpringAiForStageCoordinationAndFirstQuestion() {
+        ScriptedPlanningAiGateway aiGateway = new ScriptedPlanningAiGateway(
+                "Spring AI alignment summary",
+                """
+                        {"stages":[
+                          {"stageName":"SPRING_AI_ALIGNMENT","goal":"Validate project fit","questionSeeds":["Java","Redis"]},
+                          {"stageName":"SPRING_AI_DEPTH","goal":"Probe reliability depth","questionSeeds":["cache breakdown","latency"]}
+                        ]}
+                        """,
+                """
+                        {"question":"Spring AI first question about Redis tradeoffs","rationale":"Start from the strongest matched skill"}
+                        """
+        );
         HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
         CareerSkillRegistry skillRegistry = new CareerSkillRegistry() {
             @Override
@@ -75,7 +79,11 @@ class InterviewPlanningServiceTest {
 
             @Override
             public String promptSection(String name) {
-                return "jd-alignment".equals(name) ? "\nSkill prompt: probe for concrete backend tradeoffs." : "";
+                return switch (name) {
+                    case "jd-alignment" -> "\nSkill prompt: align JD risks.";
+                    case "question-probing" -> "\nSkill prompt: probe for concrete backend tradeoffs.";
+                    default -> "";
+                };
             }
         };
         InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, skillRegistry);
@@ -86,31 +94,70 @@ class InterviewPlanningServiceTest {
                 CvBO.builder().id(3L).summary("Java Redis").build(),
                 "Java Redis backend");
 
-        assertEquals(1, requests.size());
-        assertEquals("JD_ALIGNMENT", requests.getFirst().sceneCode());
-        assertTrue(requests.getFirst().systemPrompt().contains("Skill prompt: probe for concrete backend tradeoffs."));
+        assertEquals(3, aiGateway.requests.size());
+        assertEquals("JD_ALIGNMENT", aiGateway.requests.get(0).sceneCode());
+        assertEquals("INTERVIEW_COORDINATION", aiGateway.requests.get(1).sceneCode());
+        assertEquals("INTERVIEW_COORDINATION", aiGateway.requests.get(2).sceneCode());
+        assertTrue(aiGateway.requests.get(0).systemPrompt().contains("Skill prompt: align JD risks."));
+        assertTrue(aiGateway.requests.get(1).systemPrompt().contains("Skill prompt: probe for concrete backend tradeoffs."));
+        assertTrue(aiGateway.requests.get(2).systemPrompt().contains("Skill prompt: probe for concrete backend tradeoffs."));
         assertEquals("Spring AI alignment summary", plan.alignment().summary());
-        assertEquals(List.of("JD_ALIGNMENT", "JAVA_TECH_DEPTH", "PROJECT_REFLECTION"),
+        assertEquals(List.of("SPRING_AI_ALIGNMENT", "SPRING_AI_DEPTH"),
                 plan.stages().stream().map(InterviewStagePlan::stageName).toList());
-        assertTrue(plan.firstQuestion().contains("Please explain one project where you used java"));
+        assertEquals("Spring AI first question about Redis tradeoffs", plan.firstQuestion());
         assertTrue(memory.view("interview:s3", 8).decisionContext().contains("Plan-Execute-Reflect plan decision"));
     }
 
     @Test
-    void planningFallsBackToDeterministicQuestionWhenNoMatchedSkillExists() {
-        AiGateway aiGateway = request -> AiGatewayResult.builder()
-                .content("No direct alignment summary")
-                .provider("test")
-                .build();
+    void planningFallsBackWhenStageCoordinationAndFirstQuestionResponsesAreInvalid() {
+        ScriptedPlanningAiGateway aiGateway = new ScriptedPlanningAiGateway(
+                "Fallback alignment summary",
+                "{\"stages\":[]}",
+                "{\"question\":\"\"}"
+        );
         HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
         InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory);
 
         InterviewPlan plan = service.plan(
                 "interview:s4",
                 "s4",
-                CvBO.builder().id(4L).summary("Project ownership").build(),
-                "Go");
+                CvBO.builder().id(4L).summary("Java Redis project ownership").build(),
+                "Java Redis backend");
 
-        assertTrue(plan.firstQuestion().contains("your most relevant backend project"));
+        assertEquals(List.of("JD_ALIGNMENT", "JAVA_TECH_DEPTH", "PROJECT_REFLECTION"),
+                plan.stages().stream().map(InterviewStagePlan::stageName).toList());
+        assertTrue(plan.firstQuestion().contains("Please explain one project where you used java"));
+    }
+
+    private static class ScriptedPlanningAiGateway implements AiGateway {
+        private final String alignmentResponse;
+        private final String stageResponse;
+        private final String questionResponse;
+        private final List<AiPromptRequest> requests = new ArrayList<>();
+
+        private ScriptedPlanningAiGateway(String alignmentResponse, String stageResponse, String questionResponse) {
+            this.alignmentResponse = alignmentResponse;
+            this.stageResponse = stageResponse;
+            this.questionResponse = questionResponse;
+        }
+
+        @Override
+        public AiGatewayResult chat(AiPromptRequest request) {
+            requests.add(request);
+            String content;
+            if ("JD_ALIGNMENT".equals(request.sceneCode())) {
+                content = alignmentResponse;
+            } else if (request.systemPrompt().contains("multi-stage interview plan")) {
+                content = stageResponse;
+            } else if (request.systemPrompt().contains("opening interview question")) {
+                content = questionResponse;
+            } else {
+                throw new IllegalStateException("Unexpected prompt: " + request.systemPrompt());
+            }
+            return AiGatewayResult.builder()
+                    .content(content)
+                    .provider("test")
+                    .build();
+        }
     }
 }
