@@ -19,7 +19,6 @@ import java.util.function.Function;
 
 public interface AgenticCvOptimizationAgent extends AgenticScopeAccess {
 
-    double SCORE_GATE = 0.8;
     String REVIEW_HISTORY_STATE_KEY = "cvReviewHistory";
     Map<String, Consumer<CvReview>> PROGRESS_CALLBACKS = new ConcurrentHashMap<>();
 
@@ -39,6 +38,9 @@ public interface AgenticCvOptimizationAgent extends AgenticScopeAccess {
         if (review == null) {
             return false;
         }
+        int currentIteration = AgenticCvOptimizationRuntime.incrementIteration(agenticScope);
+        double scoreGate = AgenticCvOptimizationRuntime.configuredScoreGate(agenticScope);
+        int configuredMaxIterations = AgenticCvOptimizationRuntime.configuredMaxIterations(agenticScope);
         List<CvReview> reviewHistory = readReviewHistory(agenticScope);
         reviewHistory.add(review);
         agenticScope.writeState(REVIEW_HISTORY_STATE_KEY, List.copyOf(reviewHistory));
@@ -51,7 +53,7 @@ public interface AgenticCvOptimizationAgent extends AgenticScopeAccess {
             cv.addOptimizationRecord(review.feedback(), review.score());
             cv.setAdvice(review.feedback());
         }
-        return review.score() > SCORE_GATE;
+        return review.score() >= scoreGate || currentIteration >= configuredMaxIterations;
     }
 
     @SuppressWarnings("unchecked")

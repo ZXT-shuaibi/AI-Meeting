@@ -6,6 +6,7 @@ import com.hewei.hzyjy.xunzhi.career.agent.cv.AgenticCvOptimizationRuntime;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReviewer;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.ScoredCvTailor;
 import com.hewei.hzyjy.xunzhi.career.ai.LangChain4jAgenticSafetyPolicy;
+import com.hewei.hzyjy.xunzhi.career.config.CareerOptimizationProperties;
 import com.hewei.hzyjy.xunzhi.career.memory.LangChain4jHybridMemoryAdapter;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import dev.langchain4j.agentic.AgenticServices;
@@ -61,8 +62,13 @@ public class AgenticCvRuntimeConfiguration {
     @ConditionalOnMissingBean
     public AgenticCvOptimizationRuntime agenticCvOptimizationRuntime(
             AgenticCvOptimizationAgent agenticCvOptimizationAgent,
-            ObjectProvider<AiTracePublisher> tracePublisherProvider) {
-        return new AgenticCvOptimizationRuntime(agenticCvOptimizationAgent, tracePublisherProvider.getIfAvailable());
+            ObjectProvider<AiTracePublisher> tracePublisherProvider,
+            ObjectProvider<CareerOptimizationProperties> optimizationPropertiesProvider) {
+        return new AgenticCvOptimizationRuntime(
+                agenticCvOptimizationAgent,
+                tracePublisherProvider.getIfAvailable(),
+                optimizationPropertiesProvider.getIfAvailable(CareerOptimizationProperties::new)
+        );
     }
 
     @Bean
