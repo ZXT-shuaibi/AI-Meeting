@@ -5,10 +5,12 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CvOptimizationOrchestratorTest {
 
@@ -69,5 +71,34 @@ class CvOptimizationOrchestratorTest {
         assertEquals(1, result.cv().getOptimizationHistory().size());
         assertEquals(1, result.iterations());
         assertEquals("llm parse failed", result.failureReason());
+    }
+
+    @Test
+    void invokesProgressCallbackForEachReviewRound() {
+        CvBO original = CvBO.builder().name("candidate").summary("java backend").build();
+        AtomicInteger reviewCalls = new AtomicInteger();
+        AtomicReference<List<CvReview>> reviewsRef = new AtomicReference<>(new java.util.ArrayList<>());
+        CvReviewer reviewer = (cv, jd, templates) -> new CvReview(
+                reviewCalls.incrementAndGet() == 1 ? 0.72 : 0.85,
+                "feedback-" + reviewCalls.get()
+        );
+        ScoredCvTailor tailor = (cv, review, templates) -> cv.toBuilder()
+                .summary(cv.getSummary() + " optimized")
+                .build();
+        CvOptimizationOrchestrator orchestrator = new CvOptimizationOrchestrator(reviewer, tailor);
+
+        CvOptimizationResult result = orchestrator.optimize(
+                original,
+                "Java JD",
+                List.of(),
+                3,
+                review -> reviewsRef.get().add(review)
+        );
+
+        assertEquals(2, result.iterations());
+        assertEquals(2, reviewsRef.get().size());
+        assertEquals("feedback-1", reviewsRef.get().get(0).feedback());
+        assertEquals("feedback-2", reviewsRef.get().get(1).feedback());
+        assertTrue(result.scoreGatePassed());
     }
 }

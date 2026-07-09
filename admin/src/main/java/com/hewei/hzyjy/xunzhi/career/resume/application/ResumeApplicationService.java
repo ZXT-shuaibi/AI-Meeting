@@ -2,6 +2,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
+import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReview;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.CareerInterviewExecutionBridge;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlan;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlanningService;
@@ -40,6 +41,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -163,11 +165,19 @@ public class ResumeApplicationService {
     }
 
     public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription) {
+        return optimize(userId, resumeId, jobDescription, null);
+    }
+
+    public CvOptimizationResult optimize(
+            Long userId,
+            Long resumeId,
+            String jobDescription,
+            Consumer<CvReview> progressCallback) {
         validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
         List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)));
-        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, 3);
+        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, 3, progressCallback);
         CvBO latest = result.cv() == null ? cv : result.cv().toBuilder().id(resumeId).userId(userId).build();
         if (result.scoreGatePassed()) {
             resumeStore.save(latest);

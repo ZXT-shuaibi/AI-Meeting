@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.api;
 
+import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReview;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
 import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
@@ -15,12 +16,19 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -32,25 +40,39 @@ class ResumeCareerControllerTest {
     void optimizeStreamReturnsEmitterBeforeOptimizationTaskRuns() throws Exception {
         ResumeApplicationService service = mock(ResumeApplicationService.class);
         ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
-        ResumeCareerController controller = new ResumeCareerController(service, taskExecutor);
+        RecordingResumeCareerController controller = new RecordingResumeCareerController(service, taskExecutor);
         ResumeOptimizeReqDTO request = new ResumeOptimizeReqDTO();
         request.setJobDescription("Java backend JD");
         UserContext user = new UserContext(7L, "candidate");
-        when(service.optimize(7L, 11L, "Java backend JD")).thenReturn(CvOptimizationResult.builder()
-                .iterations(1)
-                .scoreGatePassed(true)
-                .reviewHistory(List.of())
-                .build());
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Consumer<CvReview> callback = invocation.getArgument(3, Consumer.class);
+            callback.accept(new CvReview(0.78, "feedback-1"));
+            callback.accept(new CvReview(0.84, "feedback-2"));
+            return CvOptimizationResult.builder()
+                    .iterations(2)
+                    .scoreGatePassed(true)
+                    .reviewHistory(List.of(
+                            new CvReview(0.78, "feedback-1"),
+                            new CvReview(0.84, "feedback-2")
+                    ))
+                    .build();
+        }).when(service).optimize(eq(7L), eq(11L), eq("Java backend JD"), any());
 
         SseEmitter emitter = controller.optimizeStream(11L, request, user);
 
         assertNotNull(emitter);
         verifyNoInteractions(service);
         assertEquals(1, taskExecutor.tasks.size());
+        assertEquals(List.of("START"), controller.eventNames());
 
         taskExecutor.runNext();
 
-        verify(service).optimize(7L, 11L, "Java backend JD");
+        verify(service).optimize(eq(7L), eq(11L), eq("Java backend JD"), any());
+        assertEquals(List.of("START", "ITERATION", "ITERATION", "COMPLETE"), controller.eventNames());
+        assertEquals("PROCESSING", ((Map<?, ?>) controller.eventData().get(1)).get("status"));
+        assertEquals(0.78, ((Map<?, ?>) controller.eventData().get(1)).get("score"));
+        assertEquals("feedback-2", ((Map<?, ?>) controller.eventData().get(2)).get("feedback"));
     }
 
     @Test
@@ -138,6 +160,29 @@ class ResumeCareerControllerTest {
 
         void runNext() {
             tasks.remove(0).run();
+        }
+    }
+
+    private static class RecordingResumeCareerController extends ResumeCareerController {
+        private final List<String> eventNames = new ArrayList<>();
+        private final List<Object> eventData = new ArrayList<>();
+
+        private RecordingResumeCareerController(ResumeApplicationService service, TaskExecutor taskExecutor) {
+            super(service, taskExecutor);
+        }
+
+        @Override
+        protected void sendEvent(SseEmitter emitter, String name, Object data) throws IOException {
+            eventNames.add(name);
+            eventData.add(data);
+        }
+
+        private List<String> eventNames() {
+            return eventNames;
+        }
+
+        private List<Object> eventData() {
+            return eventData;
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.hewei.hzyjy.xunzhi.career.api;
 
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
+import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReview;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlan;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.ReflectionResult;
 import com.hewei.hzyjy.xunzhi.career.api.io.InterviewPlanReqDTO;
@@ -40,6 +41,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Validated
 @RestController
@@ -171,20 +174,25 @@ public class ResumeCareerController {
             @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
             @CurrentUser UserContext currentUser) throws IOException {
         SseEmitter emitter = new SseEmitter(120000L);
-        emitter.send(SseEmitter.event().name("START").data("resume optimization started"));
+        sendEvent(emitter, "START", "resume optimization started");
         careerTaskExecutor.execute(() -> {
             try {
-                CvOptimizationResult result = resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription());
-                if (result.reviewHistory() != null) {
-                    for (int i = 0; i < result.reviewHistory().size(); i++) {
-                        emitter.send(SseEmitter.event().name("ITERATION").data(result.reviewHistory().get(i)));
-                    }
-                }
-                emitter.send(SseEmitter.event().name("COMPLETE").data(result));
+                CvOptimizationResult result = resumeApplicationService.optimize(
+                        currentUser.getUserId(),
+                        resumeId,
+                        requestParam.getJobDescription(),
+                        review -> {
+                            try {
+                                sendEvent(emitter, "ITERATION", iterationEventData(review));
+                            } catch (IOException ex) {
+                                throw new IllegalStateException("Failed to stream optimization iteration", ex);
+                            }
+                        });
+                sendEvent(emitter, "COMPLETE", result);
                 emitter.complete();
             } catch (Exception ex) {
                 try {
-                    emitter.send(SseEmitter.event().name("ERROR").data(ex.getMessage() == null ? "resume optimization failed" : ex.getMessage()));
+                    sendEvent(emitter, "ERROR", ex.getMessage() == null ? "resume optimization failed" : ex.getMessage());
                     emitter.complete();
                 } catch (IOException sendError) {
                     emitter.completeWithError(sendError);
@@ -192,6 +200,18 @@ public class ResumeCareerController {
             }
         });
         return emitter;
+    }
+
+    protected void sendEvent(SseEmitter emitter, String name, Object data) throws IOException {
+        emitter.send(SseEmitter.event().name(name).data(data));
+    }
+
+    private Map<String, Object> iterationEventData(CvReview review) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("score", review == null ? null : review.score());
+        payload.put("feedback", review == null ? null : review.feedback());
+        payload.put("status", "PROCESSING");
+        return payload;
     }
 
     @PostMapping("/interview/plans")

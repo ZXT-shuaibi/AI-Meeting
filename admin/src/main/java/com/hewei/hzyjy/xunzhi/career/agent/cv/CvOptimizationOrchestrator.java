@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 @Component
 @RequiredArgsConstructor
@@ -19,6 +20,15 @@ public class CvOptimizationOrchestrator {
     private final ScoredCvTailor tailor;
 
     public CvOptimizationResult optimize(CvBO cv, String jobDescription, List<String> referenceTemplates, int maxIterations) {
+        return optimize(cv, jobDescription, referenceTemplates, maxIterations, null);
+    }
+
+    public CvOptimizationResult optimize(
+            CvBO cv,
+            String jobDescription,
+            List<String> referenceTemplates,
+            int maxIterations,
+            Consumer<CvReview> progressCallback) {
         int boundedMaxIterations = maxIterations <= 0 ? DEFAULT_MAX_ITERATIONS : Math.min(maxIterations, DEFAULT_MAX_ITERATIONS);
         CvBO latestCv = copyCv(cv);
         CvReview bestReview = null;
@@ -35,6 +45,9 @@ public class CvOptimizationOrchestrator {
                     break;
                 }
                 history.add(review);
+                if (progressCallback != null) {
+                    progressCallback.accept(review);
+                }
                 bestReview = selectBetter(bestReview, review);
                 latestCv = copyCv(latestCv);
                 latestCv.addOptimizationRecord(review.feedback(), review.score());
