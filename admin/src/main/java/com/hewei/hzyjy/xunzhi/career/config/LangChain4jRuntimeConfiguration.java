@@ -6,6 +6,7 @@ import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewStagePlan;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.JdAlignmentResult;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.ReflectionDecision;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.ReflectionResult;
+import com.hewei.hzyjy.xunzhi.career.agent.interview.TechnicalQuestionSuggestion;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -52,6 +53,12 @@ public class LangChain4jRuntimeConfiguration {
     @ConditionalOnMissingBean(name = "InterviewReflectorAgent")
     public LocalInterviewReflectorAgent interviewReflectorAgent() {
         return new LocalInterviewReflectorAgent();
+    }
+
+    @Bean("JavaTechInterviewerAgent")
+    @ConditionalOnMissingBean(name = "JavaTechInterviewerAgent")
+    public LocalJavaTechInterviewerAgent javaTechInterviewerAgent() {
+        return new LocalJavaTechInterviewerAgent();
     }
 
     public static class LocalCvReviewerAgent {
@@ -132,6 +139,37 @@ public class LangChain4jRuntimeConfiguration {
                     .probeSuggestions(score < 6 ? List.of("Ask for concrete metrics", "Ask for failure handling details") : List.of())
                     .build();
         }
+    }
+
+    public static class LocalJavaTechInterviewerAgent {
+        public TechnicalQuestionSuggestion generateQuestion(
+                String memoryId,
+                CvBO cv,
+                String jobDescription,
+                JdAlignmentResult alignment,
+                List<InterviewStagePlan> stages,
+                String skillContext) {
+            String seed = alignment == null || alignment.matchedSkills() == null || alignment.matchedSkills().isEmpty()
+                    ? firstStageSeed(stages)
+                    : alignment.matchedSkills().get(0);
+            String question = "Please explain a Java backend project where you used " + firstNonBlank(seed, "distributed systems")
+                    + ", including architecture, failure handling, metrics, and the tradeoffs you made.";
+            return TechnicalQuestionSuggestion.builder()
+                    .question(question)
+                    .rationale("Local JavaTechInterviewer planning suggestion only; AI-Meeting executes the interview.")
+                    .build();
+        }
+    }
+
+    private static String firstStageSeed(List<InterviewStagePlan> stages) {
+        if (stages == null) {
+            return "";
+        }
+        return stages.stream()
+                .filter(stage -> stage.questionSeeds() != null && !stage.questionSeeds().isEmpty())
+                .map(stage -> stage.questionSeeds().get(0))
+                .findFirst()
+                .orElse("");
     }
 
     private static double score(CvBO cv, String jobDescription) {

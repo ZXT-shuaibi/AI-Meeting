@@ -59,6 +59,53 @@ class InterviewPlanningServiceTest {
         assertTrue(result.feedback().contains("Fallback is valid"));
     }
 
+    @Test
+    void planningUsesJavaTechInterviewerAgentForFirstQuestionOnly() {
+        AiGateway aiGateway = request -> AiGatewayResult.builder()
+                .content("{\"score\":8,\"decision\":\"NEXT\",\"feedback\":\"ok\"}")
+                .provider("test")
+                .build();
+        HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
+        AgentRuntimeGateway gateway = new AgentRuntimeGateway() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T invoke(String agentName, String methodName, Map<String, Object> variables, Class<T> responseType) {
+                if ("JavaTechInterviewerAgent".equals(agentName)) {
+                    return (T) TechnicalQuestionSuggestion.builder()
+                            .question("Agentic Java question about Redis hot key mitigation")
+                            .rationale("Use JD alignment and stage seeds")
+                            .build();
+                }
+                throw new IllegalStateException("No agent: " + agentName);
+            }
+        };
+        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, provider(gateway));
+
+        InterviewPlan plan = service.plan("interview:s3", "s3", CvBO.builder().id(3L).summary("Java Redis").build(), "Java Redis backend");
+
+        assertEquals("Agentic Java question about Redis hot key mitigation", plan.firstQuestion());
+    }
+
+    @Test
+    void planningFallsBackWhenJavaTechInterviewerAgentFails() {
+        AiGateway aiGateway = request -> AiGatewayResult.builder()
+                .content("{\"score\":8,\"decision\":\"NEXT\",\"feedback\":\"ok\"}")
+                .provider("test")
+                .build();
+        HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
+        AgentRuntimeGateway gateway = new AgentRuntimeGateway() {
+            @Override
+            public <T> T invoke(String agentName, String methodName, Map<String, Object> variables, Class<T> responseType) {
+                throw new IllegalStateException("agent unavailable");
+            }
+        };
+        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, provider(gateway));
+
+        InterviewPlan plan = service.plan("interview:s4", "s4", CvBO.builder().id(4L).summary("Java Redis").build(), "Java Redis backend");
+
+        assertTrue(plan.firstQuestion().contains("Please explain one project"));
+    }
+
     private static <T> ObjectProvider<T> provider(T value) {
         return new ObjectProvider<>() {
             @Override

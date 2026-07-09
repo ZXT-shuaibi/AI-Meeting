@@ -39,6 +39,25 @@ class LangChain4jAgentAdapterTest {
     }
 
     @Test
+    void invokesJavaTechInterviewerWithDeterministicArgumentOrder() {
+        StaticApplicationContext context = new StaticApplicationContext();
+        context.registerSingleton("JavaTechInterviewerAgent", JavaTechAgent.class);
+        LangChain4jAgentAdapter adapter = new LangChain4jAgentAdapter(context, mock(ObjectProvider.class));
+
+        String result = adapter.invoke("JavaTechInterviewerAgent", "generateQuestion", Map.of(
+                "memoryId", "interview:100:s1",
+                "cv", "cv-object",
+                "jobDescription", "Java Redis JD",
+                "alignment", "alignment-object",
+                "stages", "stage-list",
+                "skillContext", "question skill"
+        ), String.class);
+
+        assertEquals("interview:100:s1|cv-object|Java Redis JD|alignment-object|stage-list|question skill", result);
+        context.close();
+    }
+
+    @Test
     void prefersAgenticBeanWhenBothAgenticAndFallbackBeansExist() {
         StaticApplicationContext context = new StaticApplicationContext();
         context.registerSingleton("InterviewReflectorAgent", FallbackReflectAgent.class);
@@ -103,6 +122,12 @@ class LangChain4jAgentAdapterTest {
     public static class FailingReflectAgent {
         public String reflect(String memoryId, String currentQuestion, String userAnswer, Object cv, Object memoryView) {
             throw new NullPointerException("LangChain4jManaged.current() returned null");
+        }
+    }
+
+    public static class JavaTechAgent {
+        public String generateQuestion(String memoryId, Object cv, String jobDescription, Object alignment, Object stages, String skillContext) {
+            return String.join("|", List.of(memoryId, String.valueOf(cv), jobDescription, String.valueOf(alignment), String.valueOf(stages), skillContext));
         }
     }
 

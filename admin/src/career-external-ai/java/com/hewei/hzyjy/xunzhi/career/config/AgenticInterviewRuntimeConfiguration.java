@@ -3,6 +3,7 @@ package com.hewei.hzyjy.xunzhi.career.config;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.AgenticInterviewCoordinatorAgent;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.AgenticInterviewOrchestratorAgent;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.AgenticInterviewReflectorAgent;
+import com.hewei.hzyjy.xunzhi.career.agent.interview.AgenticJavaTechInterviewerAgent;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.AgenticJdAlignmentAgent;
 import com.hewei.hzyjy.xunzhi.career.ai.LangChain4jAgenticSafetyPolicy;
 import com.hewei.hzyjy.xunzhi.career.memory.LangChain4jHybridMemoryAdapter;
@@ -65,11 +66,23 @@ public class AgenticInterviewRuntimeConfiguration {
         return AgenticServices.createAgenticSystem(AgenticInterviewOrchestratorAgent.class, careerLangChain4jChatModel);
     }
 
+    @Bean("AgenticJavaTechInterviewerAgent")
+    @ConditionalOnMissingBean(name = "AgenticJavaTechInterviewerAgent")
+    public AgenticJavaTechInterviewerAgent agenticJavaTechInterviewerAgent(
+            ChatModel careerLangChain4jChatModel,
+            ObjectProvider<LangChain4jHybridMemoryAdapter> memoryAdapterProvider,
+            LangChain4jAgenticSafetyPolicy safetyPolicy) {
+        safetyPolicy.assertNativeAgenticListenersDisabled();
+        registerHybridChatMemory(memoryAdapterProvider.getIfAvailable());
+        return AgenticServices.createAgenticSystem(AgenticJavaTechInterviewerAgent.class, careerLangChain4jChatModel);
+    }
+
     private void registerHybridChatMemory(LangChain4jHybridMemoryAdapter memoryAdapter) {
         if (memoryAdapter == null || !memoryAdapter.isLangChain4jMemoryAvailable()) {
             return;
         }
         Function<Object, ChatMemory> provider = memoryId -> (ChatMemory) memoryAdapter.chatMemory(memoryId);
         AgenticJdAlignmentAgent.registerChatMemoryProvider(provider);
+        AgenticJavaTechInterviewerAgent.registerChatMemoryProvider(provider);
     }
 }

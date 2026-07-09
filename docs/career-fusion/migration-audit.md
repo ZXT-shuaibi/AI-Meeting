@@ -50,6 +50,8 @@
 
 - `InterviewPlanningService` adds JD alignment, stage coordination, first-question generation, and reflection routing.
 - `career-external-ai` registers real LangChain4j Agentic beans for `AgenticJDAlignmentAgent`, `AgenticInterviewCoordinatorAgent`, `AgenticInterviewReflectorAgent`, and `AgenticInterviewOrchestratorService`.
+- JobSpark's `JavaTechInterviewerAgent` is fused as a planning-only question contributor: default runtime exposes a local `JavaTechInterviewerAgent` facade, and `career-external-ai` registers `AgenticJavaTechInterviewerAgent`; both feed first-question suggestions into `InterviewPlanningService` while AI-Meeting still owns question cache, answer submission, scoring, locks, idempotency, snapshots, and report generation.
+- JobSpark's `jd-alignment` and `question-probing` Markdown skills are now classpath runtime assets under `career-skills/*`; `CareerSkillRegistry` loads only curated built-in skills and injects them into JD alignment / reflection / Java technical question prompts without loading arbitrary user Markdown.
 - External Agentic stage planning can return a wrapper result and is unwrapped by the main service without leaking external LangChain4j types into the default runtime.
 - External reflection results are accepted only when required fields are valid; malformed output falls back to the local Spring AI/heuristic path instead of silently advancing the interview.
 - `ReflectionResult` returns `PROBE / NEXT / STAGE_FINISH / FINISH` decisions.
@@ -80,7 +82,7 @@
 ### Knowledge Assets
 
 - JobSpark source knowledge has been split into dedicated AI-Meeting fusion docs instead of being copied as a single README dump: `jobspark-knowledge-index.md`, `qdrant-rag-notes.md`, `async-storage-and-threading.md`, `agentic-threadlocal-and-observability.md`, `runtime-skill-assets.md`, and `rendering-and-pdf-notes.md`.
-- The docs explicitly separate migrated capabilities from future parity items such as cloud OSS SDK backend, runtime skill activation, JavaTechInterviewerAgent, high-fidelity openhtmltopdf/docx4j rendering, and OCR.
+- The docs explicitly separate migrated capabilities from future parity items such as cloud OSS SDK backend, high-fidelity openhtmltopdf/docx4j rendering, strict outbox replay, universal legacy-AI tracing, and OCR.
 
 ## High-Availability Status
 
@@ -100,8 +102,8 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 2. JobSpark's async resume parsing task model is fused with an object-storage adapter boundary. AI-Meeting now exposes persistent parse task status, cancel, retry, progress, owner isolation, object-storage key/path handoff, and local snapshot fallback. It still does not include a cloud-vendor OSS SDK backend or cross-node queue worker recovery.
 3. JobSpark's AOP/LangChain4j structured-output defense is fused through framework-neutral JSON cleaning plus LangChain4j `@OutputGuardrails` on external Agentic interfaces. AI-Meeting intentionally does not patch third-party LangChain4j source; it keeps the defense at adapter/interface boundaries.
 4. LangChain4j Agentic ThreadLocal NPE framework patch is not migrated into third-party source. AI-Meeting instead implements an adapter-level safe-call/listener-disable policy: native Agentic listeners default to `false`, attempts to enable them fail fast, and unified observability stays on `AiTracePublisher`.
-5. JobSpark Skill runtime is not fully fused. The `jd-alignment` and `question-probing` Markdown skills are reflected in prompts/tests, but there is no runtime `activate_skill`/tool-provider bridge that loads these skill files as callable tools for Agentic agents.
-6. `JavaTechInterviewerAgent` is not fully fused as a real Agentic question generator. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's interview agents are intentionally limited to planning/reflection decisions for now.
+5. JobSpark Skill runtime is fused as a curated runtime prompt bridge. `CareerSkillRegistry` loads `jd-alignment` and `question-probing` from classpath resources and injects them into Spring AI/local facade and LangChain4j Agentic planning prompts. This is intentionally not a general `activate_skill` mechanism for arbitrary user Markdown.
+6. `JavaTechInterviewerAgent` is fused as a real planning/question-generation contributor. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's technical interviewer contributes first-question planning only.
 7. Observability is not yet universal across every legacy AI path. Career Agent events and tool executions are unified, but full automatic tracing still requires wiring all legacy Spring AI and Xunfei call sites into `AiTracePublisher`.
 8. Production-grade fail-closed persistence is not complete. Resume chunks, traces, memory, and decisions have MySQL/Redis paths, but there is no strict outbox or guaranteed replay for every degraded write.
 9. JobSpark's docs/knowledge assets are systematized under `docs/career-fusion/*`: Qdrant/RAG, async storage and threading, Agentic ThreadLocal/observability, runtime skill assets, rendering/PDF notes, and the migration index are now available as dedicated topic files.
@@ -110,11 +112,10 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 ## Next Fusion Order
 
 1. Add a cloud-vendor OSS backend behind `ResumeObjectStorage` if multi-node file processing requires shared storage beyond the built-in local backend.
-2. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
-3. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
-4. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
-5. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
-6. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
+2. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
+3. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
+4. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
+5. Add cloud OCR or OCR-service handoff for scanned/image-only PDFs if scanned resumes become in-scope.
 
 ## Remaining Limitations
 
@@ -122,7 +123,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- Cloud-vendor OSS backend, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, and scanned-PDF OCR remain open follow-up migrations.
+- Cloud-vendor OSS backend, arbitrary external skill activation, high-fidelity openhtmltopdf/docx4j backends, universal legacy-AI tracing, strict outbox replay, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 

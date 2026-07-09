@@ -2,6 +2,8 @@ package com.hewei.hzyjy.xunzhi.career.config;
 
 import com.hewei.hzyjy.xunzhi.career.resume.application.LocalResumeObjectStorage;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeObjectStorage;
+import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
+import com.hewei.hzyjy.xunzhi.career.skill.ClasspathCareerSkillRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -37,5 +39,11 @@ public class CareerConfiguration {
             return ResumeObjectStorage.disabled();
         }
         return new LocalResumeObjectStorage(objectStorage.getProvider(), objectStorage.getBaseDir(), objectStorage.getPublicBaseUrl());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CareerSkillRegistry careerSkillRegistry() {
+        return ClasspathCareerSkillRegistry.withBuiltIns();
     }
 }

@@ -122,6 +122,7 @@ public class LangChain4jAgentAdapter implements AgentRuntimeGateway {
             case "coordinate" -> List.of("memoryId", "alignment");
             case "plan" -> List.of("sessionId", "cv", "jobDescription", "alignment", "stages", "firstQuestion");
             case "reflect" -> List.of("memoryId", "currentQuestion", "userAnswer", "cv", "memoryView");
+            case "generateQuestion" -> List.of("memoryId", "cv", "jobDescription", "alignment", "stages", "skillContext");
             default -> List.of();
         };
     }

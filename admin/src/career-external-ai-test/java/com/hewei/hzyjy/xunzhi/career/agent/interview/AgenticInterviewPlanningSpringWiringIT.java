@@ -8,6 +8,7 @@ import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.InterviewRuleBasedScorer;
 import com.hewei.hzyjy.xunzhi.career.memory.LangChain4jHybridMemoryAdapter;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.skill.ClasspathCareerSkillRegistry;
 import dev.langchain4j.model.chat.ChatModel;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +46,7 @@ class AgenticInterviewPlanningSpringWiringIT {
             assertThat(context).hasBean("AgenticInterviewCoordinatorAgent");
             assertThat(context).hasBean("AgenticInterviewReflectorAgent");
             assertThat(context).hasBean("AgenticInterviewOrchestratorService");
+            assertThat(context).hasBean("AgenticJavaTechInterviewerAgent");
             LangChain4jAgentAdapter adapter = new LangChain4jAgentAdapter(context, mock(ObjectProvider.class));
             JdAlignmentResult directAlignment = adapter.invoke("JDAlignmentAgent", "align", java.util.Map.of(
                     "memoryId", "interview:u1:s-agentic",
@@ -64,6 +66,14 @@ class AgenticInterviewPlanningSpringWiringIT {
                     "stages", directStages,
                     "firstQuestion", "candidate first question"
             ), InterviewPlan.class);
+            TechnicalQuestionSuggestion directTechnicalQuestion = adapter.invoke("JavaTechInterviewerAgent", "generateQuestion", java.util.Map.of(
+                    "memoryId", "interview:u1:s-agentic",
+                    "cv", CvBO.builder().id(7L).summary("Java Redis backend").build(),
+                    "jobDescription", "Java Redis backend engineer",
+                    "alignment", directAlignment,
+                    "stages", directStages,
+                    "skillContext", "question probing skill"
+            ), TechnicalQuestionSuggestion.class);
             ReflectionResult directReflection = adapter.invoke("InterviewReflectorAgent", "reflect", java.util.Map.of(
                     "memoryId", "interview:u1:s-agentic",
                     "currentQuestion", "How did you use Redis?",
@@ -74,7 +84,8 @@ class AgenticInterviewPlanningSpringWiringIT {
             InterviewPlanningService service = new InterviewPlanningService(
                     request -> AiGatewayResult.builder().content("{}").build(),
                     hybridMemory,
-                    provider(adapter)
+                    provider(adapter),
+                    provider(ClasspathCareerSkillRegistry.withBuiltIns())
             );
 
             InterviewPlan plan = service.plan(
@@ -93,8 +104,9 @@ class AgenticInterviewPlanningSpringWiringIT {
             assertThat(directAlignment.summary()).contains("Agentic JD alignment");
             assertThat(directStages).extracting(InterviewStagePlan::stageName).contains("AGENTIC_JD_ALIGNMENT");
             assertThat(directPlan.firstQuestion()).contains("Agentic first question");
+            assertThat(directTechnicalQuestion.question()).contains("Agentic JavaTech question");
             assertThat(directReflection.feedback()).contains("Agentic reflection");
-            assertThat(plan.firstQuestion()).contains("Agentic first question");
+            assertThat(plan.firstQuestion()).contains("Agentic JavaTech question");
             assertThat(plan.alignment().summary()).contains("Agentic JD alignment");
             assertThat(plan.stages()).extracting(InterviewStagePlan::stageName).contains("AGENTIC_JD_ALIGNMENT");
             assertThat(reflection.decision()).isEqualTo(ReflectionDecision.PROBE);

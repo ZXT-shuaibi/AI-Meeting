@@ -9,6 +9,7 @@ import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.MemoryMessage;
 import com.hewei.hzyjy.xunzhi.career.memory.MemoryRole;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,18 +26,39 @@ public class InterviewPlanningService {
     private final AiGateway aiGateway;
     private final HybridCompactingChatMemory chatMemory;
     private final ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider;
+    private final CareerSkillRegistry skillRegistry;
 
     @Autowired
-    public InterviewPlanningService(AiGateway aiGateway, HybridCompactingChatMemory chatMemory, ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider) {
+    public InterviewPlanningService(
+            AiGateway aiGateway,
+            HybridCompactingChatMemory chatMemory,
+            ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider,
+            ObjectProvider<CareerSkillRegistry> skillRegistryProvider) {
         this.aiGateway = aiGateway;
         this.chatMemory = chatMemory;
         this.agentRuntimeGatewayProvider = agentRuntimeGatewayProvider;
+        this.skillRegistry = skillRegistryProvider.getIfAvailable(CareerSkillRegistry::disabled);
     }
 
     public InterviewPlanningService(AiGateway aiGateway, HybridCompactingChatMemory chatMemory) {
         this.aiGateway = aiGateway;
         this.chatMemory = chatMemory;
         this.agentRuntimeGatewayProvider = null;
+        this.skillRegistry = CareerSkillRegistry.disabled();
+    }
+
+    public InterviewPlanningService(AiGateway aiGateway, HybridCompactingChatMemory chatMemory, ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider) {
+        this.aiGateway = aiGateway;
+        this.chatMemory = chatMemory;
+        this.agentRuntimeGatewayProvider = agentRuntimeGatewayProvider;
+        this.skillRegistry = CareerSkillRegistry.disabled();
+    }
+
+    public InterviewPlanningService(AiGateway aiGateway, HybridCompactingChatMemory chatMemory, CareerSkillRegistry skillRegistry) {
+        this.aiGateway = aiGateway;
+        this.chatMemory = chatMemory;
+        this.agentRuntimeGatewayProvider = null;
+        this.skillRegistry = skillRegistry == null ? CareerSkillRegistry.disabled() : skillRegistry;
     }
 
     public InterviewPlan plan(String sessionId, CvBO cv, String jobDescription) {
@@ -47,14 +69,22 @@ public class InterviewPlanningService {
         String safeMemoryId = memoryId == null || memoryId.isBlank() ? memoryId(sessionId, cv) : memoryId;
         JdAlignmentResult alignment = align(safeMemoryId, cv, jobDescription);
         List<InterviewStagePlan> stages = coordinateStages(safeMemoryId, alignment);
-        String firstQuestion = generateFirstQuestion(jobDescription, alignment);
-        InterviewPlan plan = tryLangChain4jPlan(sessionId, cv, jobDescription, alignment, stages, firstQuestion);
+        FirstQuestionCandidate firstQuestion = generateFirstQuestion(safeMemoryId, cv, jobDescription, alignment, stages);
+        InterviewPlan plan = tryLangChain4jPlan(sessionId, cv, jobDescription, alignment, stages, firstQuestion.question());
+        if (plan != null && firstQuestion.javaTechGenerated()) {
+            plan = InterviewPlan.builder()
+                    .sessionId(plan.sessionId())
+                    .alignment(plan.alignment())
+                    .stages(plan.stages())
+                    .firstQuestion(firstQuestion.question())
+                    .build();
+        }
         if (plan == null) {
             plan = InterviewPlan.builder()
                     .sessionId(sessionId)
                     .alignment(alignment)
                     .stages(stages)
-                    .firstQuestion(firstQuestion)
+                    .firstQuestion(firstQuestion.question())
                     .build();
         }
         chatMemory.add(safeMemoryId, MemoryMessage.builder()
@@ -75,7 +105,8 @@ public class InterviewPlanningService {
         String feedback = aiGateway.chat(AiPromptRequest.builder()
                 .sceneCode("INTERVIEW_REFLECTION")
                 .sessionId(safeMemoryId)
-                .systemPrompt("Evaluate answer quality and return JSON: {\"score\":0-10,\"decision\":\"PROBE|NEXT|STAGE_FINISH|FINISH\",\"feedback\":\"...\",\"probeSuggestions\":[\"...\"]}.")
+                .systemPrompt("Evaluate answer quality and return JSON: {\"score\":0-10,\"decision\":\"PROBE|NEXT|STAGE_FINISH|FINISH\",\"feedback\":\"...\",\"probeSuggestions\":[\"...\"]}.\n"
+                        + runtimeSkill("question-probing"))
                 .userPrompt(memoryView.decisionContext()
                         + "\nQuestion:\n" + currentQuestion
                         + "\n\nAnswer:\n" + userAnswer
@@ -126,7 +157,8 @@ public class InterviewPlanningService {
         String summary = aiGateway.chat(AiPromptRequest.builder()
                 .sceneCode("JD_ALIGNMENT")
                 .sessionId(memoryId)
-                .systemPrompt("Summarize JD-resume alignment for interview planning. Highlight matched skills, missing risks, and first probe direction.")
+                .systemPrompt("Summarize JD-resume alignment for interview planning. Highlight matched skills, missing risks, and first probe direction.\n"
+                        + runtimeSkill("jd-alignment"))
                 .userPrompt(chatMemory.view(memoryId, 5).decisionContext() + "\nJD:\n" + jobDescription + "\n\nCV:\n" + cv)
                 .build()).content();
         JdAlignmentResult result = JdAlignmentResult.builder()
@@ -181,9 +213,46 @@ public class InterviewPlanningService {
         return stages;
     }
 
-    private String generateFirstQuestion(String jobDescription, JdAlignmentResult alignment) {
+    private FirstQuestionCandidate generateFirstQuestion(String memoryId, CvBO cv, String jobDescription, JdAlignmentResult alignment, List<InterviewStagePlan> stages) {
+        TechnicalQuestionSuggestion agentQuestion = tryJavaTechInterviewerQuestion(memoryId, cv, jobDescription, alignment, stages);
+        if (agentQuestion != null && !safe(agentQuestion.question()).isBlank()) {
+            chatMemory.add(memoryId, MemoryMessage.builder()
+                    .role(MemoryRole.ASSISTANT)
+                    .content("JavaTechInterviewer question suggestion: " + agentQuestion)
+                    .metadata(Map.of("scene", "INTERVIEW_COORDINATION", "agent", "JavaTechInterviewerAgent"))
+                    .build());
+            return new FirstQuestionCandidate(agentQuestion.question(), true);
+        }
         String seed = alignment.matchedSkills().isEmpty() ? "your most relevant backend project" : alignment.matchedSkills().get(0);
-        return "Please explain one project where you used " + seed + " and describe the architecture, your responsibility, and measurable impact.";
+        return new FirstQuestionCandidate(
+                "Please explain one project where you used " + seed + " and describe the architecture, your responsibility, and measurable impact.",
+                false
+        );
+    }
+
+    private TechnicalQuestionSuggestion tryJavaTechInterviewerQuestion(
+            String memoryId,
+            CvBO cv,
+            String jobDescription,
+            JdAlignmentResult alignment,
+            List<InterviewStagePlan> stages) {
+        AgentRuntimeGateway gateway = agentRuntimeGateway();
+        if (gateway == null) {
+            return null;
+        }
+        try {
+            return gateway.invoke("JavaTechInterviewerAgent", "generateQuestion", Map.of(
+                    "memoryId", memoryId,
+                    "cv", cv == null ? CvBO.builder().build() : cv,
+                    "jobDescription", safe(jobDescription),
+                    "alignment", alignment == null ? JdAlignmentResult.builder().build() : alignment,
+                    "stages", stages == null ? List.of() : stages,
+                    "skillContext", runtimeSkill("question-probing")
+            ), TechnicalQuestionSuggestion.class);
+        } catch (Exception ex) {
+            log.debug("LangChain4j JavaTechInterviewerAgent unavailable, falling back", ex);
+            return null;
+        }
     }
 
     private JdAlignmentResult tryLangChain4jAlignment(String memoryId, CvBO cv, String jobDescription) {
@@ -288,6 +357,10 @@ public class InterviewPlanningService {
         return agentRuntimeGatewayProvider == null ? null : agentRuntimeGatewayProvider.getIfAvailable();
     }
 
+    private String runtimeSkill(String name) {
+        return skillRegistry == null ? "" : skillRegistry.promptSection(name);
+    }
+
     private String formatMemoryView(CompactedMemoryView memoryView) {
         if (memoryView == null) {
             return "";
@@ -358,5 +431,8 @@ public class InterviewPlanningService {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private record FirstQuestionCandidate(String question, boolean javaTechGenerated) {
     }
 }

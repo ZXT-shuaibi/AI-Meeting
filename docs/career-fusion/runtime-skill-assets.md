@@ -1,6 +1,14 @@
 # Runtime Skill Assets
 
-JobSpark included Markdown skills for JD alignment and question probing. AI-Meeting currently uses their ideas in prompts and tests, but does not yet load the skill files as runtime tools.
+JobSpark included Markdown skills for JD alignment and question probing. AI-Meeting now loads curated UTF-8 copies of those skills from classpath resources and injects them into planning prompts at runtime.
+
+Implementation:
+
+- Runtime assets live under `admin/src/main/resources/career-skills/jd-alignment` and `admin/src/main/resources/career-skills/question-probing`.
+- `CareerSkillRegistry` is the business-facing boundary.
+- `ClasspathCareerSkillRegistry` loads only the built-in whitelist and returns an empty prompt section when a skill is missing.
+- `InterviewPlanningService` injects `jd-alignment` into JD alignment prompts and `question-probing` into reflection / Java technical question prompts.
+- `AgenticJavaTechInterviewerAgent` receives the same curated probing skill context through `AgentRuntimeGateway`.
 
 ## JD Alignment Skill Contract
 
@@ -33,7 +41,7 @@ Expected output shape:
 AI-Meeting mapping:
 
 - `JdAlignmentResult`
-- `InterviewPlanningService#alignWithAgent`
+- `InterviewPlanningService#align`
 - `AgenticJdAlignmentAgent#align`
 - `BusinessAgentScene.JD_ALIGNMENT`
 
@@ -61,12 +69,18 @@ AI-Meeting mapping:
 
 ## Proposed Runtime Bridge
 
-Future implementation should add:
+Implemented bridge:
 
 - `CareerSkillRegistry`: loads curated skill markdown assets from `docs/career-fusion/skills` or classpath resources.
-- `CareerSkillTool`: exposes selected skill content as a LangChain4j tool or prompt-injection-safe context block.
-- `SkillInvocationTrace`: publishes tool execution events through `AiTracePublisher`.
+- Prompt-injection-safe context block: selected skill content is appended to system prompts, not executed as arbitrary code or arbitrary tools.
 - Fail-closed behavior: if skill loading fails, agents continue with embedded prompts and mark metadata `skillDegraded=true`.
+
+Still intentionally not implemented:
+
+- A general `activate_skill` mechanism.
+- Arbitrary user-provided Markdown skills.
+- LangChain4j tool-provider execution for skill files.
+- Dedicated `SkillInvocationTrace`; skill usage is currently visible through the surrounding AI invocation trace.
 
 Guardrails:
 
