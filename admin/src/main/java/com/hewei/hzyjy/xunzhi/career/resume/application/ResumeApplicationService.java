@@ -177,7 +177,7 @@ public class ResumeApplicationService {
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
         List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)));
-        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, 3, progressCallback);
+        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, progressCallback);
         CvBO latest = result.cv() == null ? cv : result.cv().toBuilder().id(resumeId).userId(userId).build();
         if (result.scoreGatePassed()) {
             resumeStore.save(latest);

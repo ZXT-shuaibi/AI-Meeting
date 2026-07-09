@@ -19,6 +19,9 @@ public final class CareerJsonResponseCleaner {
             throw new IllegalArgumentException("Input response is null or empty");
         }
         String cleaned = rawResponse.trim();
+        if (isToolCallResponse(cleaned)) {
+            return cleaned;
+        }
         if (isJson(cleaned)) {
             return cleaned;
         }
@@ -34,6 +37,21 @@ public final class CareerJsonResponseCleaner {
         String codeBlock = extractFromCodeBlocksManual(cleaned);
         if (codeBlock != null) {
             return codeBlock;
+        }
+
+        String lineResult = extractFromJsonLine(cleaned);
+        if (lineResult != null) {
+            return lineResult;
+        }
+
+        String tailResult = extractFromTail(cleaned);
+        if (tailResult != null) {
+            return tailResult;
+        }
+
+        String strippedResult = extractByStrippingPrefix(cleaned);
+        if (strippedResult != null) {
+            return strippedResult;
         }
 
         List<String> candidates = extractJsonCandidates(cleaned);
@@ -55,6 +73,13 @@ public final class CareerJsonResponseCleaner {
             return fixed;
         }
         throw new IllegalArgumentException("No parseable JSON object found in model response");
+    }
+
+    private static boolean isToolCallResponse(String text) {
+        String trimmed = text == null ? "" : text.trim();
+        return trimmed.startsWith("<tool_calls>")
+                || trimmed.startsWith("<invoke")
+                || trimmed.startsWith("<parameter");
     }
 
     private static String tryParseRobust(String candidate) {
@@ -103,6 +128,81 @@ public final class CareerJsonResponseCleaner {
         return null;
     }
 
+    private static String extractFromJsonLine(String text) {
+        String[] lines = text.split("\\R", -1);
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+                continue;
+            }
+            int start = text.indexOf(trimmed);
+            if (start < 0) {
+                continue;
+            }
+            char openBrace = trimmed.charAt(0);
+            char closeBrace = openBrace == '{' ? '}' : ']';
+            String extracted = extractBracedStructure(text, openBrace, closeBrace, start);
+            String result = tryParseRobust(extracted);
+            if (result != null) {
+                return result;
+            }
+        }
+        return null;
+    }
+
+    private static String extractFromTail(String text) {
+        int lastBrace = text.lastIndexOf('}');
+        int lastBracket = text.lastIndexOf(']');
+        int closePos = Math.max(lastBrace, lastBracket);
+        if (closePos < 0) {
+            return null;
+        }
+
+        char closeChar = lastBrace > lastBracket ? '}' : ']';
+        char openChar = closeChar == '}' ? '{' : '[';
+        int depth = 0;
+        boolean inString = false;
+
+        for (int i = closePos; i >= 0; i--) {
+            char current = text.charAt(i);
+            if (current == '"' && (i == 0 || text.charAt(i - 1) != '\\')) {
+                inString = !inString;
+            }
+            if (!inString) {
+                if (current == closeChar) {
+                    depth++;
+                } else if (current == openChar) {
+                    depth--;
+                    if (depth == 0) {
+                        return tryParseRobust(text.substring(i, closePos + 1));
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String extractByStrippingPrefix(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char current = text.charAt(i);
+            if (current != '{' && current != '[') {
+                continue;
+            }
+            String candidate = text.substring(i);
+            String result = tryParseRobust(candidate);
+            if (result != null) {
+                return result;
+            }
+            char closeChar = current == '{' ? '}' : ']';
+            String extracted = extractBracedStructure(text, current, closeChar, i);
+            result = tryParseRobust(extracted);
+            if (result != null) {
+                return result;
+            }
+        }
+        return null;
+    }
+
     private static List<String> extractJsonCandidates(String text) {
         List<String> candidates = new ArrayList<>();
         for (int i = 0; i < text.length(); i++) {
@@ -142,6 +242,10 @@ public final class CareerJsonResponseCleaner {
                 }
             }
             previous = current;
+        }
+        int end = text.lastIndexOf(closeBrace);
+        if (end > start) {
+            return text.substring(start, end + 1);
         }
         return null;
     }

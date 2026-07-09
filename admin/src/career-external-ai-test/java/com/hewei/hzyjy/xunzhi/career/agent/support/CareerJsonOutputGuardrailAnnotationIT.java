@@ -43,6 +43,21 @@ class CareerJsonOutputGuardrailAnnotationIT {
         assertThat(result.successfulText()).isEqualTo("{\"score\":0.87,\"feedback\":\"保留真实经历并增强量化表达\"}");
     }
 
+    @Test
+    void guardrailKeepsToolCallPayloadUntouched() {
+        CareerJsonOutputGuardrail guardrail = new CareerJsonOutputGuardrail();
+
+        OutputGuardrailResult result = guardrail.validate(AiMessage.from("""
+                <tool_calls>
+                  <invoke name="activate_skill"></invoke>
+                </tool_calls>
+                """));
+
+        assertThat(result.result()).isEqualTo(dev.langchain4j.guardrail.GuardrailResult.Result.SUCCESS_WITH_RESULT);
+        assertThat(result.successfulText()).contains("<tool_calls>");
+        assertThat(result.successfulText()).contains("activate_skill");
+    }
+
     private void assertGuarded(Class<?> agentType, String methodName) throws Exception {
         Method method = findMethod(agentType, methodName);
         OutputGuardrails guardrails = method.getAnnotation(OutputGuardrails.class);

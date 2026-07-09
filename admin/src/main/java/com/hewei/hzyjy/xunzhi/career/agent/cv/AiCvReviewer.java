@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -77,26 +78,62 @@ public class AiCvReviewer implements CvReviewer {
     }
 
     private double heuristicScore(CvBO cv, String jobDescription) {
-        String cvText = String.valueOf(cv).toLowerCase();
-        int hit = 0;
-        int total = 0;
-        for (String token : safe(jobDescription).toLowerCase().split("[^\\p{IsHan}\\p{Alnum}]+")) {
-            if (token.length() < 2) {
-                continue;
-            }
-            total++;
-            if (cvText.contains(token)) {
-                hit++;
-            }
-        }
-        if (total == 0) {
+        List<String> tokens = extractMeaningfulTokens(jobDescription);
+        if (tokens.isEmpty()) {
             return 0.5;
         }
-        return Math.min(0.95, 0.45 + 0.5 * hit / total);
+        String technicalText = String.join(" ",
+                safe(cv == null ? null : cv.getTitle()),
+                safe(cv == null ? null : cv.getSummary()),
+                stringify(cv == null ? null : cv.getSkills()));
+        String experienceText = String.join(" ",
+                safe(cv == null ? null : cv.getSummary()),
+                stringify(cv == null ? null : cv.getExperiences()));
+        String projectText = String.join(" ",
+                safe(cv == null ? null : cv.getSummary()),
+                stringify(cv == null ? null : cv.getProjects()));
+        String educationText = String.join(" ",
+                stringify(cv == null ? null : cv.getEducations()),
+                stringify(cv == null ? null : cv.getCertificates()));
+
+        double technical = coverage(tokens, technicalText);
+        double experience = coverage(tokens, experienceText);
+        double project = coverage(tokens, projectText);
+        double education = coverage(tokens, educationText);
+        double weightedScore = technical * 0.35 + experience * 0.30 + project * 0.25 + education * 0.10;
+        return Math.min(0.95, 0.35 + 0.6 * weightedScore);
     }
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private String stringify(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private List<String> extractMeaningfulTokens(String text) {
+        List<String> tokens = new ArrayList<>();
+        for (String token : safe(text).toLowerCase().split("[^\\p{IsHan}\\p{Alnum}]+")) {
+            if (token.length() >= 2) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    private double coverage(List<String> tokens, String sectionText) {
+        if (tokens == null || tokens.isEmpty()) {
+            return 0.0;
+        }
+        String normalizedSection = safe(sectionText).toLowerCase();
+        int hit = 0;
+        for (String token : tokens) {
+            if (normalizedSection.contains(token)) {
+                hit++;
+            }
+        }
+        return (double) hit / tokens.size();
     }
 
     private String buildSystemPrompt() {

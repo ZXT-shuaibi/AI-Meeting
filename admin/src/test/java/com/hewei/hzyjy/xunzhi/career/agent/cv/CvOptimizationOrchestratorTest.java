@@ -1,11 +1,12 @@
 package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
+import com.hewei.hzyjy.xunzhi.career.config.CareerOptimizationProperties;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -77,7 +78,7 @@ class CvOptimizationOrchestratorTest {
     void invokesProgressCallbackForEachReviewRound() {
         CvBO original = CvBO.builder().name("candidate").summary("java backend").build();
         AtomicInteger reviewCalls = new AtomicInteger();
-        AtomicReference<List<CvReview>> reviewsRef = new AtomicReference<>(new java.util.ArrayList<>());
+        List<CvReview> progressReviews = new ArrayList<>();
         CvReviewer reviewer = (cv, jd, templates) -> new CvReview(
                 reviewCalls.incrementAndGet() == 1 ? 0.72 : 0.85,
                 "feedback-" + reviewCalls.get()
@@ -92,13 +93,36 @@ class CvOptimizationOrchestratorTest {
                 "Java JD",
                 List.of(),
                 3,
-                review -> reviewsRef.get().add(review)
+                progressReviews::add
         );
 
         assertEquals(2, result.iterations());
-        assertEquals(2, reviewsRef.get().size());
-        assertEquals("feedback-1", reviewsRef.get().get(0).feedback());
-        assertEquals("feedback-2", reviewsRef.get().get(1).feedback());
+        assertEquals(2, progressReviews.size());
+        assertEquals("feedback-1", progressReviews.get(0).feedback());
+        assertEquals("feedback-2", progressReviews.get(1).feedback());
         assertTrue(result.scoreGatePassed());
+    }
+
+    @Test
+    void usesConfiguredScoreGateAndMaxIterationsWhenCallerDoesNotOverride() {
+        CvBO original = CvBO.builder().name("candidate").summary("java backend").build();
+        AtomicInteger reviewCalls = new AtomicInteger();
+        CvReviewer reviewer = (cv, jd, templates) -> new CvReview(
+                reviewCalls.incrementAndGet() == 1 ? 0.74 : 0.77,
+                "feedback-" + reviewCalls.get()
+        );
+        ScoredCvTailor tailor = (cv, review, templates) -> cv.toBuilder()
+                .summary(cv.getSummary() + " optimized")
+                .build();
+        CareerOptimizationProperties properties = new CareerOptimizationProperties();
+        properties.setMaxIterations(2);
+        properties.setScoreGate(0.75);
+        CvOptimizationOrchestrator orchestrator = new CvOptimizationOrchestrator(reviewer, tailor, properties);
+
+        CvOptimizationResult result = orchestrator.optimize(original, "Java JD", List.of());
+
+        assertEquals(2, result.iterations());
+        assertTrue(result.scoreGatePassed());
+        assertEquals(0.77, result.bestReview().score());
     }
 }

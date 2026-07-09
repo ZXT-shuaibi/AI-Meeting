@@ -33,4 +33,12 @@ class CareerConfigurationObjectStorageTest {
 
         assertThat(storage).isInstanceOf(LocalResumeObjectStorage.class);
     }
+
+    @Test
+    void optimizationPropertiesExposeExpectedDefaults() {
+        CareerOptimizationProperties properties = new CareerOptimizationProperties();
+
+        assertThat(properties.getMaxIterations()).isEqualTo(3);
+        assertThat(properties.getScoreGate()).isEqualTo(0.8);
+    }
 }

@@ -119,6 +119,9 @@ xunzhi-agent:
         provider: ${XUNZHI_CAREER_RAG_RERANK_PROVIDER:dashscope}
         model: ${XUNZHI_CAREER_RAG_RERANK_MODEL:qwen3-vl-rerank}
         api-key: ${XUNZHI_CAREER_RAG_RERANK_API_KEY:${DASHSCOPE_API_KEY:}}
+    optimization:
+      max-iterations: ${XUNZHI_CAREER_OPTIMIZATION_MAX_ITERATIONS:3}
+      score-gate: ${XUNZHI_CAREER_OPTIMIZATION_SCORE_GATE:0.8}
     observability:
       enabled: ${XUNZHI_CAREER_OBSERVABILITY_ENABLED:true}
       redis-ttl-seconds: ${XUNZHI_CAREER_OBSERVABILITY_REDIS_TTL_SECONDS:604800}

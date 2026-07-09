@@ -3,6 +3,8 @@ package com.hewei.hzyjy.xunzhi.career.agent.cv;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.EducationBO;
+import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -65,5 +67,32 @@ class AiCvReviewerTest {
         assertTrue(captured.get().systemPrompt().contains("Return only JSON"));
         assertTrue(captured.get().userPrompt().contains("Reference templates"));
         assertTrue(review.feedback().contains("Need quantified results"));
+    }
+
+    @Test
+    void heuristicFallbackWeightsTechnicalSignalsMoreThanEducationSignals() {
+        AiCvReviewer reviewer = new AiCvReviewer(request -> AiGatewayResult.builder()
+                .content("not-json")
+                .provider("test")
+                .build(), CareerSkillRegistry.disabled());
+
+        CvBO technicalCv = CvBO.builder()
+                .summary("backend engineer")
+                .skills(List.of(
+                        SkillBO.builder().name("java").level("advanced").build(),
+                        SkillBO.builder().name("spring").level("advanced").build()
+                ))
+                .build();
+        CvBO educationCv = CvBO.builder()
+                .summary("backend engineer")
+                .educations(List.of(
+                        EducationBO.builder().degree("Bachelor").major("Computer Science").description("software engineering").build()
+                ))
+                .build();
+
+        CvReview technicalReview = reviewer.review(technicalCv, "Java Spring backend bachelor", List.of());
+        CvReview educationReview = reviewer.review(educationCv, "Java Spring backend bachelor", List.of());
+
+        assertTrue(technicalReview.score() > educationReview.score());
     }
 }
