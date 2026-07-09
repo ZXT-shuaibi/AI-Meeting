@@ -11,4 +11,9 @@ public record JdAlignmentResult(
         List<String> missingSkills,
         String summary
 ) {
+    public JdAlignmentResult {
+        matchedSkills = matchedSkills == null ? List.of() : List.copyOf(matchedSkills);
+        missingSkills = missingSkills == null ? List.of() : List.copyOf(missingSkills);
+        summary = summary == null ? "" : summary;
+    }
 }

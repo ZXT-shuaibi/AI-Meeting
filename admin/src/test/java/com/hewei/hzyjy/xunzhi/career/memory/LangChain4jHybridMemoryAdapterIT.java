@@ -72,6 +72,7 @@ class LangChain4jHybridMemoryAdapterIT {
         assertEquals(MemoryRole.SYSTEM, messages.get(0).role());
         assertEquals(MemoryRole.USER, messages.get(1).role());
         assertEquals(MemoryRole.ASSISTANT, messages.get(2).role());
+        assertTrue(messages.stream().anyMatch(message -> message.content().contains("system context")));
         assertTrue(hybridMemory.view("resume:9", 3).decisionContext().contains("Reflect decision: PROBE"));
 
         List<?> langChainMessages = list(invoke(store, "getMessages", "resume:9"));
@@ -79,6 +80,57 @@ class LangChain4jHybridMemoryAdapterIT {
         assertTrue(text(langChainMessages.get(0)).contains("Historical Key Decisions"));
         assertTrue(langChainMessages.stream().anyMatch(message -> "USER".equals(typeName(message))));
         assertTrue(langChainMessages.stream().anyMatch(message -> "AI".equals(typeName(message))));
+    }
+
+    @Test
+    void doesNotReplayLangChain4jSystemPromptsAcrossAgents() {
+        HybridCompactingChatMemory hybridMemory = new HybridCompactingChatMemory(
+                request -> AiGatewayResult.builder().content("summary").build(),
+                new InterviewRuleBasedScorer(),
+                new DecisionIndex()
+        );
+        LangChain4jHybridMemoryAdapter adapter = new LangChain4jHybridMemoryAdapter(hybridMemory);
+        Object store = adapter.chatMemoryStore();
+
+        invoke(store, "updateMessages", "interview:system-filter", List.of(
+                newMessage("dev.langchain4j.data.message.SystemMessage", "JD-resume alignment analyst system prompt"),
+                newMessage("dev.langchain4j.data.message.UserMessage", "How did you use Redis?"),
+                newMessage("dev.langchain4j.data.message.AiMessage", "Reflect decision: PROBE")
+        ));
+
+        List<?> langChainMessages = list(invoke(store, "getMessages", "interview:system-filter"));
+
+        assertTrue(langChainMessages.stream().noneMatch(message -> text(message).contains("JD-resume alignment analyst system prompt")));
+        assertTrue(langChainMessages.stream().anyMatch(message -> text(message).contains("How did you use Redis?")));
+        assertTrue(langChainMessages.stream().anyMatch(message -> text(message).contains("Reflect decision: PROBE")));
+        assertTrue(hybridMemory.messages("interview:system-filter").stream()
+                .noneMatch(message -> message.content().contains("JD-resume alignment analyst system prompt")));
+        assertTrue(hybridMemory.view("interview:system-filter", 3).decisionContext()
+                .contains("Reflect decision: PROBE"));
+        assertTrue(!hybridMemory.view("interview:system-filter", 3).decisionContext()
+                .contains("JD-resume alignment analyst system prompt"));
+    }
+
+    @Test
+    void keepsBusinessSystemMessagesAcrossRoundTrip() {
+        HybridCompactingChatMemory hybridMemory = new HybridCompactingChatMemory(
+                request -> AiGatewayResult.builder().content("summary").build(),
+                new InterviewRuleBasedScorer(),
+                new DecisionIndex()
+        );
+        String memoryId = "interview:business-system";
+        hybridMemory.add(memoryId, MemoryMessage.builder()
+                .role(MemoryRole.SYSTEM)
+                .content("Business guardrail: keep salary discussion out of scope")
+                .metadata(Map.of("source", "business-rule"))
+                .build());
+        LangChain4jHybridMemoryAdapter adapter = new LangChain4jHybridMemoryAdapter(hybridMemory);
+        Object store = adapter.chatMemoryStore();
+
+        List<?> roundTrip = list(invoke(store, "getMessages", memoryId));
+
+        assertTrue(roundTrip.stream()
+                .anyMatch(message -> text(message).contains("Business guardrail: keep salary discussion out of scope")));
     }
 
     private static Class<?> classForName(String className) {

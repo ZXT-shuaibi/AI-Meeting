@@ -10,4 +10,9 @@ public record InterviewStagePlan(
         String goal,
         List<String> questionSeeds
 ) {
+    public InterviewStagePlan {
+        stageName = stageName == null ? "" : stageName;
+        goal = goal == null ? "" : goal;
+        questionSeeds = questionSeeds == null ? List.of() : List.copyOf(questionSeeds);
+    }
 }

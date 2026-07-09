@@ -69,7 +69,7 @@ public class InterviewPlanningService {
         String safeMemoryId = memoryId == null || memoryId.isBlank() ? memoryId(null, cv) : memoryId;
         CompactedMemoryView memoryView = chatMemory.view(safeMemoryId, 8);
         ReflectionResult agentResult = tryLangChain4jReflect(safeMemoryId, currentQuestion, userAnswer, cv, memoryView);
-        if (agentResult != null) {
+        if (isValidReflection(agentResult)) {
             return agentResult;
         }
         String feedback = aiGateway.chat(AiPromptRequest.builder()
@@ -220,6 +220,10 @@ public class InterviewPlanningService {
                         .map(InterviewStagePlan.class::cast)
                         .toList();
             }
+            List<InterviewStagePlan> wrappedStages = extractStages(result);
+            if (!wrappedStages.isEmpty()) {
+                return wrappedStages;
+            }
             return List.of();
         } catch (Exception ex) {
             log.debug("LangChain4j InterviewCoordinatorAgent unavailable, falling back", ex);
@@ -264,7 +268,7 @@ public class InterviewPlanningService {
                     "currentQuestion", currentQuestion,
                     "userAnswer", userAnswer,
                     "cv", cv,
-                    "memoryView", memoryView
+                    "memoryView", formatMemoryView(memoryView)
             ), ReflectionResult.class);
         } catch (Exception ex) {
             log.debug("LangChain4j InterviewReflectorAgent unavailable, falling back", ex);
@@ -272,8 +276,45 @@ public class InterviewPlanningService {
         }
     }
 
+    private boolean isValidReflection(ReflectionResult result) {
+        return result != null
+                && result.decision() != null
+                && result.score() >= 0
+                && result.score() <= 10
+                && !safe(result.feedback()).isBlank();
+    }
+
     private AgentRuntimeGateway agentRuntimeGateway() {
         return agentRuntimeGatewayProvider == null ? null : agentRuntimeGatewayProvider.getIfAvailable();
+    }
+
+    private String formatMemoryView(CompactedMemoryView memoryView) {
+        if (memoryView == null) {
+            return "";
+        }
+        String messages = memoryView.messages() == null ? "" : memoryView.messages().stream()
+                .map(message -> message.role() + ": " + safe(message.content()))
+                .limit(12)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return safe(memoryView.decisionContext()) + "\n" + messages;
+    }
+
+    private List<InterviewStagePlan> extractStages(Object result) {
+        if (result == null) {
+            return List.of();
+        }
+        try {
+            Object stages = result.getClass().getMethod("stages").invoke(result);
+            if (stages instanceof List<?> list) {
+                return list.stream()
+                        .filter(InterviewStagePlan.class::isInstance)
+                        .map(InterviewStagePlan.class::cast)
+                        .toList();
+            }
+        } catch (Exception ignored) {
+            // External Agentic profile may return a wrapper; default fallback remains local.
+        }
+        return List.of();
     }
 
     private ReflectionDecision parseDecision(String feedback, int score) {

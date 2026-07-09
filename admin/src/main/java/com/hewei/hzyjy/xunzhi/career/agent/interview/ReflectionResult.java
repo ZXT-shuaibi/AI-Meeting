@@ -11,4 +11,8 @@ public record ReflectionResult(
         String feedback,
         List<String> probeSuggestions
 ) {
+    public ReflectionResult {
+        feedback = feedback == null ? "" : feedback;
+        probeSuggestions = probeSuggestions == null ? List.of() : List.copyOf(probeSuggestions);
+    }
 }

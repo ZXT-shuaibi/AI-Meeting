@@ -6,6 +6,7 @@
 - Career fusion code is isolated under `com.hewei.hzyjy.xunzhi.career`.
 - LangChain4j is behind `AgentRuntimeGateway` / `EmbeddingGateway`; default build keeps external LangChain4j dependencies in the optional `career-external-ai` profile.
 - Default runtime has local Agent Facade beans named `CvReviewer`, `ScoredCvTailor`, `JDAlignmentAgent`, `InterviewCoordinatorAgent`, `InterviewOrchestratorService`, and `InterviewReflectorAgent`, so `LangChain4jAgentAdapter` has a real invocation path even without external LangChain4j jars.
+- When the `career-external-ai` profile is enabled, `LangChain4jAgentAdapter` prefers `Agentic*` beans over local facade beans, so real LangChain4j Agentic implementations can take over planning/optimization without replacing AI-Meeting's execution pipeline.
 - Sa-Token remains the auth system. JobSpark JWT/Spring Security is not migrated.
 
 ## Migrated Highlights
@@ -14,6 +15,7 @@
 
 - Structured resume aggregate `CvBO` and nested resume BOs are available.
 - Resume upload stores structured data through `ResumeStore` and triggers best-effort embedding immediately after save.
+- Text-based PDF resume parsing is wired through PDFBox 3.x with `RandomAccessReadBuffer` + `Loader.loadPDF(buffer)`, bounded by page and extracted-text limits.
 - MySQL-first `MySqlResumeStore` is backed by in-memory fallback and enforces owner lookup through `findByIdAndUserId`.
 - RAG chunking uses overview / summary / skills / experience / project / education chunks with `user_id` and `resume_id` metadata.
 - Retrieval keeps HyDE, multi-query, hierarchical coarse recall, vector + BM25 fine recall, RRF fusion, context augmentation, DashScope rerank gateway, Redis cache, and BM25 fallback.
@@ -37,6 +39,9 @@
 ### P2 Plan-Execute-Reflect Interview Planning
 
 - `InterviewPlanningService` adds JD alignment, stage coordination, first-question generation, and reflection routing.
+- `career-external-ai` registers real LangChain4j Agentic beans for `AgenticJDAlignmentAgent`, `AgenticInterviewCoordinatorAgent`, `AgenticInterviewReflectorAgent`, and `AgenticInterviewOrchestratorService`.
+- External Agentic stage planning can return a wrapper result and is unwrapped by the main service without leaking external LangChain4j types into the default runtime.
+- External reflection results are accepted only when required fields are valid; malformed output falls back to the local Spring AI/heuristic path instead of silently advancing the interview.
 - `ReflectionResult` returns `PROBE / NEXT / STAGE_FINISH / FINISH` decisions.
 - `CareerInterviewExecutionBridge` publishes generated plans into AI-Meeting's existing interview question cache, initializes interview flow, writes suggestions/direction, marks the session `READY`, and refreshes the runtime snapshot.
 - The bridge is fail-closed for executable-plan publication: if questions/flow cannot be read back from the original execution cache, the session is not marked `READY`.
@@ -49,6 +54,7 @@
 - HIGH messages stay pinned, LOW messages are summarized, recent messages are retained, and Redis read/write failure falls back to local memory.
 - Planning, optimization, upload, embedding, and reflection add key decisions/messages to memory.
 - Reflection and JD alignment inject recent decision context into prompts.
+- LangChain4j Agentic runtime system prompts are filtered at the adapter boundary so one Agent's role prompt is not replayed into another Agent; business `SYSTEM` messages, compressed history, and `DecisionIndex` context remain preserved.
 
 ### P4 Observability
 
@@ -69,7 +75,28 @@
 - Qdrant can be enabled with `XUNZHI_QDRANT_ENABLED=true`; default remains off so local compilation/runtime is not blocked by external infra.
 - Hash embedding fallback uses the configured Qdrant vector size, avoiding fallback/vector-store dimension mismatch.
 - Career API DTOs and service layer cap JD/question/answer input lengths, resume upload has a dedicated 6 MB request filter plus 5 MB file limit, DOCX central-directory entry count/entry size/total uncompressed size are bounded, and extracted text is truncated before structure inference.
-- PDF resume parsing is intentionally not faked: upload accepts text-like files and DOCX; PDF/OCR extraction must be wired before claiming production PDF resume ingestion.
+- PDF resume parsing is implemented for text-based PDFs through PDFBox 3.x; scanned-image OCR remains outside the current migrated scope.
+
+## JobSpark Markdown Gap List
+
+The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, `skills/question-probing`, and the supplemental pasted JobSpark notes. Items marked "not fully fused" should not be claimed as complete resume highlights yet.
+
+1. Multi-format resume rendering is not fully fused. JobSpark's Markdown -> HTML -> PDF -> Word delivery pipeline (`CvRendererFacade`, template/font validation, openhtmltopdf rendering, DOCX output) is still not present as an AI-Meeting end-to-end API. Current AI-Meeting PDF work is parsing/upload extraction, not optimized-resume rendering.
+2. JobSpark's async resume parsing task model is only partially fused. AI-Meeting upload currently parses and embeds inside the request/service flow with bounded files; it does not yet expose JobSpark-style persistent parse task status, cancel/retry, OSS-first file handoff, or resumable async parsing for long-running uploads.
+3. JobSpark Skill runtime is not fully fused. The `jd-alignment` and `question-probing` Markdown skills are reflected in prompts/tests, but there is no runtime `activate_skill`/tool-provider bridge that loads these skill files as callable tools for Agentic agents.
+4. `JavaTechInterviewerAgent` is not fully fused as a real Agentic question generator. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's interview agents are intentionally limited to planning/reflection decisions for now.
+5. Observability is not yet universal across every legacy AI path. Career Agent events and tool executions are unified, but full automatic tracing still requires wiring all legacy Spring AI and Xunfei call sites into `AiTracePublisher`.
+6. Production-grade fail-closed persistence is not complete. Resume chunks, traces, memory, and decisions have MySQL/Redis paths, but there is no strict outbox or guaranteed replay for every degraded write.
+7. OCR for scanned PDFs is not migrated. PDFBox 3.x text extraction handles text-based PDF resumes; image-only scans still require an OCR service or fallback path.
+
+## Next Fusion Order
+
+1. Add the multi-format resume rendering pipeline first, because it is a visible JobSpark differentiator and completes the "optimize -> deliver" resume loop.
+2. Add persistent async resume parse tasks with task status/cancel/retry and object-storage handoff, because it turns upload/parse into a high-availability backend story.
+3. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
+4. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
+5. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
+6. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
 
 ## Remaining Limitations
 
@@ -77,6 +104,7 @@
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
+- Multi-format optimized-resume rendering, persistent async parse task cancellation, runtime Markdown Skill activation, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 
@@ -96,5 +124,7 @@ mvn.cmd -pl admin "-Dtest=ResumeRagServiceTest,ResumeApplicationServiceTest,Care
 mvn.cmd -pl admin "-Dtest=CvOptimizationOrchestratorTest,ResumeRagServiceTest,CareerInterviewExecutionBridgeTest,ResumeApplicationServiceTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=ResumeCareerControllerTest,AiTraceEventListenerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=AiCvReviewerTest,InterviewPlanningServiceTest,Bm25ScorerTest,DecisionIndexTest,CvOptimizationOrchestratorTest,QdrantResumeVectorStoreTest,LangChain4jAgentAdapterTest,LangChain4jEmbeddingAdapterTest,CareerInterviewExecutionBridgeTest,ResumeRagServiceTest,ResumeApplicationServiceTest,CareerResumeUploadSizeFilterTest,ResumeCareerControllerTest,AiTraceEventListenerTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin -Pcareer-external-ai "-Dtest=AgenticCvOptimizationRuntimeIT,AgenticCvOptimizationSpringWiringIT,LangChain4jHybridMemoryAdapterIT,AgenticInterviewPlanningSpringWiringIT,InterviewPlanningServiceTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin "-Dtest=ResumePdfTextExtractorTest,ResumeApplicationServiceTest,LangChain4jAgentAdapterTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -DskipTests "-Denforcer.skip=true" compile
 ```

@@ -46,6 +46,10 @@ public class LangChain4jAgentAdapter implements AgentRuntimeGateway {
     }
 
     private Object resolveAgent(String agentName) {
+        String agenticBeanName = "Agentic" + agentName;
+        if (applicationContext.containsBean(agenticBeanName)) {
+            return applicationContext.getBean(agenticBeanName);
+        }
         if (applicationContext.containsBean(agentName)) {
             return applicationContext.getBean(agentName);
         }

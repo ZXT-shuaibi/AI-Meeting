@@ -5,13 +5,10 @@ import lombok.Builder;
 import java.util.List;
 
 @Builder
-public record InterviewPlan(
-        String sessionId,
-        JdAlignmentResult alignment,
-        List<InterviewStagePlan> stages,
-        String firstQuestion
+public record AgenticInterviewStagePlanResult(
+        List<InterviewStagePlan> stages
 ) {
-    public InterviewPlan {
+    public AgenticInterviewStagePlanResult {
         stages = stages == null ? List.of() : List.copyOf(stages);
     }
 }

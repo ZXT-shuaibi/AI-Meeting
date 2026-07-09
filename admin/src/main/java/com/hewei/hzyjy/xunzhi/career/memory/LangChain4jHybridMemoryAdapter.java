@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Component
 @RequiredArgsConstructor
@@ -59,6 +60,9 @@ public class LangChain4jHybridMemoryAdapter {
             result.add(newMessage(SYSTEM_MESSAGE_CLASS, view.decisionContext()));
         }
         for (MemoryMessage message : view.messages()) {
+            if (isLangChain4jSystemPrompt(message)) {
+                continue;
+            }
             result.add(toLangChainMessage(message));
         }
         return List.copyOf(result);
@@ -79,7 +83,34 @@ public class LangChain4jHybridMemoryAdapter {
         return MemoryMessage.builder()
                 .role(roleOf(message))
                 .content(textOf(message))
+                .metadata(metadataOf(message))
                 .build();
+    }
+
+    private Map<String, Object> metadataOf(Object message) {
+        if (roleOf(message) == MemoryRole.SYSTEM && isKnownAgenticRuntimePrompt(textOf(message))) {
+            return Map.of("source", "langchain4j-system-prompt");
+        }
+        return Map.of();
+    }
+
+    private boolean isLangChain4jSystemPrompt(MemoryMessage message) {
+        if (message == null || message.role() != MemoryRole.SYSTEM) {
+            return false;
+        }
+        return message.metadata() != null && "langchain4j-system-prompt".equals(message.metadata().get("source"));
+    }
+
+    private boolean isKnownAgenticRuntimePrompt(String content) {
+        if (content == null || content.isBlank()) {
+            return false;
+        }
+        return content.contains("JD-resume alignment analyst")
+                || content.contains("senior Java/backend interview coordinator")
+                || content.contains("technical interview reflection agent")
+                || content.contains("planning layer of an AI interview system")
+                || content.contains("senior recruiter and backend technical interviewer")
+                || content.contains("resume tailoring agent");
     }
 
     private MemoryRole roleOf(Object message) {
@@ -192,7 +223,7 @@ public class LangChain4jHybridMemoryAdapter {
                     hybridMemory.clear(String.valueOf(memoryId));
                     if (args != null && args.length > 1 && args[1] instanceof Iterable<?> messages) {
                         for (Object message : messages) {
-                            hybridMemory.add(String.valueOf(memoryId), fromLangChainMessage(message));
+                            addLangChainMessage(String.valueOf(memoryId), message);
                         }
                     }
                     yield null;
@@ -215,12 +246,20 @@ public class LangChain4jHybridMemoryAdapter {
         }
         if (args.length == 1 && args[0] instanceof Iterable<?> messages) {
             for (Object message : messages) {
-                hybridMemory.add(memoryId, fromLangChainMessage(message));
+                addLangChainMessage(memoryId, message);
             }
             return;
         }
         for (Object message : args) {
-            hybridMemory.add(memoryId, fromLangChainMessage(message));
+            addLangChainMessage(memoryId, message);
         }
+    }
+
+    private void addLangChainMessage(String memoryId, Object message) {
+        MemoryMessage memoryMessage = fromLangChainMessage(message);
+        if (isLangChain4jSystemPrompt(memoryMessage)) {
+            return;
+        }
+        hybridMemory.add(memoryId, memoryMessage);
     }
 }
