@@ -44,6 +44,7 @@ class ClasspathCareerSkillRegistryTest {
         assertTrue(tailor.body().contains("禁止虚构"));
         assertTrue(tailor.body().contains("技能/经验/项目/教育"));
         assertTrue(tailor.body().contains("输出格式规范"));
+        assertTrue(tailor.body().contains("meta.localeConfig.sectionLabels"));
         assertTrue(registry.promptSection("cv-tailor").contains("Runtime Skill: cv-tailor"));
     }
 }

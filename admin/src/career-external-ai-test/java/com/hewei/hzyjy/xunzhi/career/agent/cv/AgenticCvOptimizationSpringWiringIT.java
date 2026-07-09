@@ -126,7 +126,9 @@ class AgenticCvOptimizationSpringWiringIT {
                 .contains("禁止虚构")
                 .contains("技能/经验/项目/教育")
                 .contains("审核反馈")
-                .contains("CvBO");
+                .contains("CvBO")
+                .contains("meta.localeConfig.sectionLabels")
+                .contains("yyyy-MM-dd");
     }
 
     private String systemPrompt(Class<?> agentType, String methodName) {
