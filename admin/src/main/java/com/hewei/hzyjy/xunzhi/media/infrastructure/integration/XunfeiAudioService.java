@@ -11,15 +11,17 @@ import com.alibaba.fastjson2.JSONObject;
 import com.hewei.hzyjy.xunzhi.common.config.storage.ApplicationStorageProperties;
 import com.hewei.hzyjy.xunzhi.common.config.xunfei.XunfeiLatProperties;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.apache.commons.codec.binary.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -37,8 +39,10 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -48,7 +52,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class XunfeiAudioService {
 
     private static final OkHttpClient WS_CLIENT = new OkHttpClient.Builder()
@@ -60,10 +63,27 @@ public class XunfeiAudioService {
 
     private final XunfeiLatProperties xunfeiLatPropertiesConfig;
     private final ApplicationStorageProperties storageProperties;
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     @Resource(name = "queryExecutor")
     private ExecutorService queryExecutor;
 
     private IatClient iatClient;
+
+    public XunfeiAudioService(
+            XunfeiLatProperties xunfeiLatPropertiesConfig,
+            ApplicationStorageProperties storageProperties) {
+        this(xunfeiLatPropertiesConfig, storageProperties, null);
+    }
+
+    @Autowired
+    public XunfeiAudioService(
+            XunfeiLatProperties xunfeiLatPropertiesConfig,
+            ApplicationStorageProperties storageProperties,
+            ObjectProvider<AiTracePublisher> tracePublisherProvider) {
+        this.xunfeiLatPropertiesConfig = xunfeiLatPropertiesConfig;
+        this.storageProperties = storageProperties;
+        this.tracePublisherProvider = tracePublisherProvider;
+    }
 
     @PostConstruct
     public void init() {
@@ -152,6 +172,21 @@ public class XunfeiAudioService {
      */
     public CompletableFuture<String> realTimeAudioToText(InputStream audioInputStream, AudioResultCallback callback) {
         CompletableFuture<String> future = new CompletableFuture<>();
+        String sessionId = UUID.randomUUID().toString();
+        String traceId = UUID.randomUUID().toString();
+        long start = System.currentTimeMillis();
+        AiTracePublisher tracePublisher = tracePublisher();
+        if (tracePublisher != null) {
+            tracePublisher.started(
+                    traceId,
+                    "LEGACY_XUNFEI_REALTIME_ASR",
+                    "xunfei-asr:" + sessionId,
+                    "xunfei",
+                    "realtime-asr",
+                    audioInputStream == null ? "audioInputStream=null" : "audioInputStream=provided"
+            );
+            attachRealtimeTrace(future, tracePublisher, traceId, sessionId, start);
+        }
 
         if (audioInputStream == null) {
             future.completeExceptionally(new ClientException("audioInputStream cannot be null"));
@@ -168,7 +203,6 @@ public class XunfeiAudioService {
             return future;
         }
 
-        String sessionId = UUID.randomUUID().toString();
         String wsUrl;
         try {
             wsUrl = buildAstUrl(appId, apiKey, apiSecret, sessionId);
@@ -280,6 +314,46 @@ public class XunfeiAudioService {
         });
 
         return future;
+    }
+
+    private void attachRealtimeTrace(CompletableFuture<String> future,
+                                     AiTracePublisher tracePublisher,
+                                     String traceId,
+                                     String sessionId,
+                                     long startMillis) {
+        future.whenComplete((result, error) -> {
+            if (error == null) {
+                tracePublisher.completed(
+                        traceId,
+                        "LEGACY_XUNFEI_REALTIME_ASR",
+                        "xunfei-asr:" + sessionId,
+                        "xunfei",
+                        "realtime-asr",
+                        startMillis,
+                        "textLength=" + (result == null ? 0 : result.length()),
+                        Map.of("sessionId", sessionId, "textLength", result == null ? 0 : result.length())
+                );
+                return;
+            }
+            tracePublisher.failed(
+                    traceId,
+                    "LEGACY_XUNFEI_REALTIME_ASR",
+                    "xunfei-asr:" + sessionId,
+                    "xunfei",
+                    "realtime-asr",
+                    startMillis,
+                    unwrapCompletion(error)
+            );
+        });
+    }
+
+    private Throwable unwrapCompletion(Throwable error) {
+        Throwable current = error;
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private JSONObject extractAstSt(JSONObject root) {
@@ -401,6 +475,9 @@ public class XunfeiAudioService {
             sameRange.updatedAt = System.currentTimeMillis();
             return;
         }
+        if (replacePendingLiveSnapshot(sentencePool, sn, bg, ed, text, finalized)) {
+            return;
+        }
 
         SegmentState reusable = findReusableRangeState(sentencePool, bg, ed, text);
         if (reusable != null) {
@@ -416,6 +493,40 @@ public class XunfeiAudioService {
             state.bg = bg;
             state.ed = ed;
         }
+    }
+
+    private boolean replacePendingLiveSnapshot(TreeMap<Integer, SegmentState> sentencePool,
+                                               int sn,
+                                               Integer bg,
+                                               Integer ed,
+                                               String text,
+                                               boolean finalized) {
+        if (sentencePool == null || sentencePool.isEmpty() || StrUtil.isBlank(text)) {
+            return false;
+        }
+
+        StringBuilder pending = new StringBuilder();
+        for (SegmentState state : sentencePool.values()) {
+            if (state != null && !state.finalized && state.text != null) {
+                pending.append(state.text);
+            }
+        }
+        String pendingComparable = toComparableText(pending.toString());
+        String incomingComparable = toComparableText(text);
+        if (pendingComparable.isEmpty()
+                || incomingComparable.length() <= pendingComparable.length()
+                || !incomingComparable.startsWith(pendingComparable)) {
+            return false;
+        }
+
+        sentencePool.entrySet().removeIf(entry -> entry.getValue() != null && !entry.getValue().finalized);
+        upsertAstSegment(sentencePool, sn, text, finalized);
+        SegmentState replacement = sentencePool.get(sn);
+        if (replacement != null) {
+            replacement.bg = bg;
+            replacement.ed = ed;
+        }
+        return true;
     }
 
     private SegmentState findExactRangeState(TreeMap<Integer, SegmentState> sentencePool, Integer bg, Integer ed) {
@@ -648,6 +759,10 @@ public class XunfeiAudioService {
             }
         }
         return result.toString();
+    }
+
+    private AiTracePublisher tracePublisher() {
+        return tracePublisherProvider == null ? null : tracePublisherProvider.getIfAvailable();
     }
 
     private void sendAudioStream(WebSocket webSocket,

@@ -84,7 +84,7 @@
 ### Knowledge Assets
 
 - JobSpark source knowledge has been split into dedicated AI-Meeting fusion docs instead of being copied as a single README dump: `jobspark-knowledge-index.md`, `qdrant-rag-notes.md`, `async-storage-and-threading.md`, `agentic-threadlocal-and-observability.md`, `runtime-skill-assets.md`, and `rendering-and-pdf-notes.md`.
-- The docs explicitly separate migrated capabilities from future parity items such as high-fidelity openhtmltopdf/docx4j rendering, strict outbox replay, Xunfei media tracing, distributed task recovery leases, and OCR.
+- The docs explicitly separate migrated capabilities from future parity items such as high-fidelity openhtmltopdf/docx4j rendering, strict outbox replay, distributed task recovery leases, frame-level media trace detail, and OCR.
 
 ## High-Availability Status
 
@@ -106,26 +106,26 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 4. LangChain4j Agentic ThreadLocal NPE framework patch is not migrated into third-party source. AI-Meeting instead implements an adapter-level safe-call/listener-disable policy: native Agentic listeners default to `false`, attempts to enable them fail fast, and unified observability stays on `AiTracePublisher`.
 5. JobSpark Skill runtime is fused as a curated runtime prompt bridge. `CareerSkillRegistry` loads `jd-alignment` and `question-probing` from classpath resources and injects them into Spring AI/local facade and LangChain4j Agentic planning prompts. This is intentionally not a general `activate_skill` mechanism for arbitrary user Markdown.
 6. `JavaTechInterviewerAgent` is fused as a real planning/question-generation contributor. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's technical interviewer contributes first-question planning only.
-7. Observability now covers career Agent/tool events plus the main legacy Spring AI chat, XingChen workflow chat, and XingChen file upload paths. Xunfei realtime ASR and long-text TTS are still not wrapped in `AiTracePublisher`.
+7. Observability now covers career Agent/tool events plus the main legacy Spring AI chat, XingChen workflow chat, XingChen file upload, Xunfei realtime ASR, and Xunfei long-text TTS create/query paths. Xunfei media tracing is entrypoint-level; per-frame ASR packet trace remains local service logging, not persisted Agent trace data.
 8. Production-grade fail-closed persistence is not complete. Resume chunks, traces, memory, and decisions have MySQL/Redis paths, but there is no strict outbox or guaranteed replay for every degraded write.
 9. JobSpark's docs/knowledge assets are systematized under `docs/career-fusion/*`: Qdrant/RAG, async storage and threading, Agentic ThreadLocal/observability, runtime skill assets, rendering/PDF notes, and the migration index are now available as dedicated topic files.
 10. OCR for scanned PDFs is not migrated. PDFBox 3.x text extraction handles text-based PDF resumes; image-only scans still require an OCR service or fallback path.
 
 ## Next Fusion Order
 
-1. Extend `AiTracePublisher` coverage to Xunfei media integrations such as realtime ASR and long-text TTS if those paths need the same Agent trace view.
-2. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
-3. Add distributed lock/lease ownership around stale async parse task recovery if multi-node workers run the scheduler concurrently.
-4. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
-5. Add cloud OCR or OCR-service handoff for scanned/image-only PDFs if scanned resumes become in-scope.
+1. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
+2. Add distributed lock/lease ownership around stale async parse task recovery if multi-node workers run the scheduler concurrently.
+3. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
+4. Add cloud OCR or OCR-service handoff for scanned/image-only PDFs if scanned resumes become in-scope.
+5. Add optional per-frame ASR packet trace persistence only if media debugging needs searchable packet-level history.
 
 ## Remaining Limitations
 
 - External LangChain4j integrations are still isolated behind adapters/profile gates; the default runtime uses local facade beans so the migration is demonstrable without forcing LangChain4j jars or external agent services into the Spring AI path.
-- Observability is unified for career Agent events, tool executions, legacy Spring AI chat, XingChen workflow chat, and XingChen file upload. Xunfei media ASR/TTS tracing remains a follow-up.
+- Observability is unified for career Agent events, tool executions, legacy Spring AI chat, XingChen workflow chat, XingChen file upload, and Xunfei media ASR/TTS entrypoints.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- Arbitrary external skill activation, high-fidelity openhtmltopdf/docx4j backends, Xunfei media tracing, distributed task recovery leases, strict outbox replay, and scanned-PDF OCR remain open follow-up migrations.
+- Arbitrary external skill activation, high-fidelity openhtmltopdf/docx4j backends, distributed task recovery leases, strict outbox replay, per-frame ASR trace persistence, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 

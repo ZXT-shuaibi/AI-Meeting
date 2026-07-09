@@ -5,9 +5,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.hewei.hzyjy.xunzhi.common.config.xunfei.XunfeiLatProperties;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ServiceException;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.media.api.io.req.LongTextTtsReqDTO;
 import com.hewei.hzyjy.xunzhi.media.api.io.resp.LongTextTtsTaskRespDTO;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
@@ -15,6 +15,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Mac;
@@ -25,6 +27,8 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,7 +37,6 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class XunfeiLongTextTtsService {
 
     private static final int MAX_TEXT_LENGTH = 100000;
@@ -52,44 +55,95 @@ public class XunfeiLongTextTtsService {
             .build();
 
     private final XunfeiLatProperties xunfeiLatProperties;
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
+
+    public XunfeiLongTextTtsService(XunfeiLatProperties xunfeiLatProperties) {
+        this(xunfeiLatProperties, null);
+    }
+
+    @Autowired
+    public XunfeiLongTextTtsService(
+            XunfeiLatProperties xunfeiLatProperties,
+            ObjectProvider<AiTracePublisher> tracePublisherProvider) {
+        this.xunfeiLatProperties = xunfeiLatProperties;
+        this.tracePublisherProvider = tracePublisherProvider;
+    }
 
     public LongTextTtsTaskRespDTO createTask(LongTextTtsReqDTO requestParam) {
-        validateCredentials();
-        validateCreateRequest(requestParam);
+        String traceId = UUID.randomUUID().toString();
+        long start = System.currentTimeMillis();
+        AiTracePublisher tracePublisher = tracePublisher();
+        String input = requestParam == null ? null : "textLength=" + (requestParam.getText() == null ? 0 : requestParam.getText().length());
+        if (tracePublisher != null) {
+            tracePublisher.started(traceId, "LEGACY_XUNFEI_TTS_CREATE", "xunfei-tts", "xunfei", "long-text-tts", input);
+        }
+        try {
+            validateCredentials();
+            validateCreateRequest(requestParam);
 
-        JSONObject body = buildCreateTaskBody(requestParam);
-        JSONObject response = postWithSign(DTS_CREATE_PATH, body);
-        LongTextTtsTaskRespDTO result = parseTaskResponse(response);
-        if (!Integer.valueOf(0).equals(result.getCode())) {
-            throw new ServiceException("Failed to create TTS task: " + result.getMessage());
+            JSONObject body = buildCreateTaskBody(requestParam);
+            JSONObject response = postWithSign(DTS_CREATE_PATH, body);
+            LongTextTtsTaskRespDTO result = parseTaskResponse(response);
+            if (!Integer.valueOf(0).equals(result.getCode())) {
+                throw new ServiceException("Failed to create TTS task: " + result.getMessage());
+            }
+            if (StrUtil.isBlank(result.getTaskId())) {
+                throw new ServiceException("TTS task was created but taskId is missing");
+            }
+            result.setSuccess(true);
+            result.setCompleted(false);
+            if (tracePublisher != null) {
+                tracePublisher.completed(traceId, "LEGACY_XUNFEI_TTS_CREATE", "xunfei-tts", "xunfei",
+                        "long-text-tts", start, "taskId=" + result.getTaskId(), Map.of("taskId", result.getTaskId()));
+            }
+            return result;
+        } catch (RuntimeException ex) {
+            if (tracePublisher != null) {
+                tracePublisher.failed(traceId, "LEGACY_XUNFEI_TTS_CREATE", "xunfei-tts", "xunfei",
+                        "long-text-tts", start, ex);
+            }
+            throw ex;
         }
-        if (StrUtil.isBlank(result.getTaskId())) {
-            throw new ServiceException("TTS task was created but taskId is missing");
-        }
-        result.setSuccess(true);
-        result.setCompleted(false);
-        return result;
     }
 
     public LongTextTtsTaskRespDTO queryTask(String taskId) {
-        validateCredentials();
-        if (StrUtil.isBlank(taskId)) {
-            throw new ClientException("taskId must not be blank");
+        String traceId = UUID.randomUUID().toString();
+        long start = System.currentTimeMillis();
+        AiTracePublisher tracePublisher = tracePublisher();
+        if (tracePublisher != null) {
+            tracePublisher.started(traceId, "LEGACY_XUNFEI_TTS_QUERY", "xunfei-tts:" + StrUtil.blankToDefault(taskId, "unknown"),
+                    "xunfei", "long-text-tts", "taskId=" + taskId);
         }
+        try {
+            validateCredentials();
+            if (StrUtil.isBlank(taskId)) {
+                throw new ClientException("taskId must not be blank");
+            }
 
-        JSONObject body = new JSONObject();
-        JSONObject header = new JSONObject();
-        header.put("app_id", normalize(xunfeiLatProperties.getAppId()));
-        header.put("task_id", taskId.trim());
-        body.put("header", header);
+            JSONObject body = new JSONObject();
+            JSONObject header = new JSONObject();
+            header.put("app_id", normalize(xunfeiLatProperties.getAppId()));
+            header.put("task_id", taskId.trim());
+            body.put("header", header);
 
-        JSONObject response = postWithSign(DTS_QUERY_PATH, body);
-        LongTextTtsTaskRespDTO result = parseTaskResponse(response);
-        if (!Integer.valueOf(0).equals(result.getCode())) {
-            throw new ServiceException("Failed to query TTS task: " + result.getMessage());
+            JSONObject response = postWithSign(DTS_QUERY_PATH, body);
+            LongTextTtsTaskRespDTO result = parseTaskResponse(response);
+            if (!Integer.valueOf(0).equals(result.getCode())) {
+                throw new ServiceException("Failed to query TTS task: " + result.getMessage());
+            }
+            enrichDownloadedArtifacts(result);
+            if (tracePublisher != null) {
+                tracePublisher.completed(traceId, "LEGACY_XUNFEI_TTS_QUERY", "xunfei-tts:" + taskId.trim(), "xunfei",
+                        "long-text-tts", start, "status=" + result.getTaskStatus(), Map.of("taskId", taskId.trim()));
+            }
+            return result;
+        } catch (RuntimeException ex) {
+            if (tracePublisher != null) {
+                tracePublisher.failed(traceId, "LEGACY_XUNFEI_TTS_QUERY", "xunfei-tts:" + StrUtil.blankToDefault(taskId, "unknown"),
+                        "xunfei", "long-text-tts", start, ex);
+            }
+            throw ex;
         }
-        enrichDownloadedArtifacts(result);
-        return result;
     }
 
     public LongTextTtsTaskRespDTO synthesizeAndWait(LongTextTtsReqDTO requestParam) {
@@ -436,5 +490,9 @@ public class XunfeiLongTextTtsService {
         if (value != 0 && value != 1) {
             throw new ClientException(fieldName + " must be 0 or 1");
         }
+    }
+
+    private AiTracePublisher tracePublisher() {
+        return tracePublisherProvider == null ? null : tracePublisherProvider.getIfAvailable();
     }
 }

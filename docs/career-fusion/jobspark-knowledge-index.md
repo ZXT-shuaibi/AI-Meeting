@@ -22,7 +22,7 @@ This directory captures the JobSpark-Resume knowledge assets after fusion into A
 - Rendering maps to `CvRendererFacade`, `ResumeMarkdownService`, `PdfResumeRenderBackend`, and `DocxResumeRenderBackend`.
 - Async task state maps to `career_resume_parse_task`, `ResumeParseTaskStore`, `ResumeApplicationService#uploadAsync`, and `ResumeParseTaskRecoveryService` for stale active task repair.
 - OSS handoff maps to `ResumeObjectStorage` with built-in local and Alibaba Cloud OSS backends; the Alibaba backend is reflectively loaded so the default build is not coupled to the cloud SDK.
-- Observability maps to `AiTracePublisher`, Spring events, Redis hot traces, MySQL cold traces, and legacy wrappers for Spring AI chat, XingChen workflow chat, and XingChen file upload.
+- Observability maps to `AiTracePublisher`, Spring events, Redis hot traces, MySQL cold traces, and legacy wrappers for Spring AI chat, XingChen workflow chat, XingChen file upload, Xunfei realtime ASR, and Xunfei long-text TTS.
 - ThreadLocal NPE mitigation maps to `LangChain4jAgenticSafetyPolicy` and adapter-level failure unwrapping.
 
 ## Remaining Knowledge-To-Code Gaps

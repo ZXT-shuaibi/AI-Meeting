@@ -47,6 +47,8 @@ Legacy AI coverage:
 - `UniversalAiChatHandler` publishes `LEGACY_AI_CHAT` invocation traces for Spring AI compatible OpenAI/DeepSeek/Spark chat.
 - `AgentMessageServiceImpl` publishes `LEGACY_XINGCHEN_AGENT_CHAT` invocation traces around XingChen workflow streaming chat.
 - `AgentFileAssetServiceImpl` publishes `LEGACY_XINGCHEN_FILE_UPLOAD` tool traces around XingChen file uploads.
+- `XunfeiAudioService` publishes `LEGACY_XUNFEI_REALTIME_ASR` invocation traces around realtime ASR futures.
+- `XunfeiLongTextTtsService` publishes `LEGACY_XUNFEI_TTS_CREATE` and `LEGACY_XUNFEI_TTS_QUERY` invocation traces around long-text TTS task operations.
 
 ## Safe Extension Rule
 
@@ -60,4 +62,4 @@ If native LangChain4j listeners are needed later:
 
 ## Current Limitation
 
-Observability is unified for career Agent/tool events and the main legacy chat/file-upload paths. Xunfei media integrations such as realtime ASR and long-text TTS are still logged by their own services and are not yet wrapped with `AiTracePublisher`.
+Observability is unified for career Agent/tool events, the main legacy chat/file-upload paths, and Xunfei media service entrypoints. ASR raw packet payloads remain local service logs unless a future packet-level trace persistence requirement is added.

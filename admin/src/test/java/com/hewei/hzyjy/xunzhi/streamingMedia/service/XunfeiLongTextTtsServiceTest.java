@@ -3,16 +3,23 @@ package com.hewei.hzyjy.xunzhi.streamingMedia.service;
 import com.alibaba.fastjson2.JSONObject;
 import com.hewei.hzyjy.xunzhi.common.config.xunfei.XunfeiLatProperties;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
+import com.hewei.hzyjy.xunzhi.career.observability.AiInvocationFailedEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiInvocationStartedEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.media.api.io.req.LongTextTtsReqDTO;
 import com.hewei.hzyjy.xunzhi.media.api.io.resp.LongTextTtsTaskRespDTO;
 import com.hewei.hzyjy.xunzhi.media.infrastructure.integration.XunfeiLongTextTtsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -108,6 +115,29 @@ class XunfeiLongTextTtsServiceTest {
         assertTrue(result.getCompleted());
     }
 
+    @Test
+    void createTask_ShouldPublishUnifiedTraceWhenCredentialsMissing() {
+        RecordingEventPublisher eventPublisher = new RecordingEventPublisher();
+        XunfeiLongTextTtsService tracedService = new XunfeiLongTextTtsService(
+                new XunfeiLatProperties(),
+                traceProvider(new AiTracePublisher(eventPublisher))
+        );
+        LongTextTtsReqDTO request = new LongTextTtsReqDTO();
+        request.setText("hello");
+
+        assertThrows(Exception.class, () -> tracedService.createTask(request));
+
+        assertTrue(eventPublisher.events().stream()
+                .filter(AiInvocationStartedEvent.class::isInstance)
+                .map(AiInvocationStartedEvent.class::cast)
+                .anyMatch(event -> "LEGACY_XUNFEI_TTS_CREATE".equals(event.sceneCode())));
+        assertTrue(eventPublisher.events().stream()
+                .filter(AiInvocationFailedEvent.class::isInstance)
+                .map(AiInvocationFailedEvent.class::cast)
+                .anyMatch(event -> "LEGACY_XUNFEI_TTS_CREATE".equals(event.sceneCode())
+                        && event.errorMessage().contains("credentials")));
+    }
+
     private void invokeVoid(String methodName, Object arg) throws Exception {
         Method method = XunfeiLongTextTtsService.class.getDeclaredMethod(methodName, arg.getClass());
         method.setAccessible(true);
@@ -134,6 +164,43 @@ class XunfeiLongTextTtsServiceTest {
                 throw exception;
             }
             throw ex;
+        }
+    }
+
+    private static ObjectProvider<AiTracePublisher> traceProvider(AiTracePublisher publisher) {
+        return new ObjectProvider<>() {
+            @Override
+            public AiTracePublisher getObject(Object... args) {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getIfAvailable() {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getIfUnique() {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getObject() {
+                return publisher;
+            }
+        };
+    }
+
+    private static class RecordingEventPublisher implements ApplicationEventPublisher {
+        private final List<Object> events = new ArrayList<>();
+
+        @Override
+        public void publishEvent(Object event) {
+            events.add(event);
+        }
+
+        List<Object> events() {
+            return events;
         }
     }
 }

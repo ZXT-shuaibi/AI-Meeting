@@ -3,11 +3,18 @@ package com.hewei.hzyjy.xunzhi.streamingMedia.service;
 import com.alibaba.fastjson2.JSONObject;
 import com.hewei.hzyjy.xunzhi.common.config.storage.ApplicationStorageProperties;
 import com.hewei.hzyjy.xunzhi.common.config.xunfei.XunfeiLatProperties;
+import com.hewei.hzyjy.xunzhi.career.observability.AiInvocationFailedEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiInvocationStartedEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.media.infrastructure.integration.XunfeiAudioService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -19,12 +26,7 @@ class XunfeiAudioServiceTest {
 
     @BeforeEach
     void setUp() {
-        ApplicationStorageProperties storageProperties = new ApplicationStorageProperties();
-        storageProperties.setBaseDir("target/xunzhi-test");
-        storageProperties.setAudioTempDir("target/xunzhi-test/audio");
-        storageProperties.setUploadTempDir("target/xunzhi-test/upload");
-        storageProperties.setLogDir("target/xunzhi-test/logs");
-        service = new XunfeiAudioService(new XunfeiLatProperties(), storageProperties);
+        service = new XunfeiAudioService(new XunfeiLatProperties(), storageProperties());
     }
 
     @Test
@@ -146,6 +148,28 @@ class XunfeiAudioServiceTest {
         assertEquals("Hello there", text);
     }
 
+    @Test
+    void realTimeAudioToText_ShouldPublishUnifiedTraceWhenInputStreamIsNull() {
+        RecordingEventPublisher eventPublisher = new RecordingEventPublisher();
+        XunfeiAudioService tracedService = new XunfeiAudioService(
+                new XunfeiLatProperties(),
+                storageProperties(),
+                traceProvider(new AiTracePublisher(eventPublisher))
+        );
+
+        tracedService.realTimeAudioToText(null, null);
+
+        org.junit.jupiter.api.Assertions.assertTrue(eventPublisher.events().stream()
+                .filter(AiInvocationStartedEvent.class::isInstance)
+                .map(AiInvocationStartedEvent.class::cast)
+                .anyMatch(event -> "LEGACY_XUNFEI_REALTIME_ASR".equals(event.sceneCode())));
+        org.junit.jupiter.api.Assertions.assertTrue(eventPublisher.events().stream()
+                .filter(AiInvocationFailedEvent.class::isInstance)
+                .map(AiInvocationFailedEvent.class::cast)
+                .anyMatch(event -> "LEGACY_XUNFEI_REALTIME_ASR".equals(event.sceneCode())
+                        && event.errorMessage().contains("audioInputStream")));
+    }
+
     @SuppressWarnings("unchecked")
     private <T> T invoke(String methodName, Class<?>[] parameterTypes, Object... args) throws Exception {
         Method method = XunfeiAudioService.class.getDeclaredMethod(methodName, parameterTypes);
@@ -157,5 +181,51 @@ class XunfeiAudioServiceTest {
         Method method = XunfeiAudioService.class.getDeclaredMethod(methodName, parameterTypes);
         method.setAccessible(true);
         method.invoke(service, args);
+    }
+
+    private ApplicationStorageProperties storageProperties() {
+        ApplicationStorageProperties storageProperties = new ApplicationStorageProperties();
+        storageProperties.setBaseDir("target/xunzhi-test");
+        storageProperties.setAudioTempDir("target/xunzhi-test/audio");
+        storageProperties.setUploadTempDir("target/xunzhi-test/upload");
+        storageProperties.setLogDir("target/xunzhi-test/logs");
+        return storageProperties;
+    }
+
+    private static ObjectProvider<AiTracePublisher> traceProvider(AiTracePublisher publisher) {
+        return new ObjectProvider<>() {
+            @Override
+            public AiTracePublisher getObject(Object... args) {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getIfAvailable() {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getIfUnique() {
+                return publisher;
+            }
+
+            @Override
+            public AiTracePublisher getObject() {
+                return publisher;
+            }
+        };
+    }
+
+    private static class RecordingEventPublisher implements ApplicationEventPublisher {
+        private final List<Object> events = new ArrayList<>();
+
+        @Override
+        public void publishEvent(Object event) {
+            events.add(event);
+        }
+
+        List<Object> events() {
+            return events;
+        }
     }
 }
