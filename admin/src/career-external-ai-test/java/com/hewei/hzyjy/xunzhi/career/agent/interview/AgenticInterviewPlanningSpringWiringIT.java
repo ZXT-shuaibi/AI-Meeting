@@ -65,16 +65,24 @@ class AgenticInterviewPlanningSpringWiringIT {
                             "cv", CvBO.builder().id(7L).summary("Java Redis backend").build(),
                             "jobDescription", "Java Redis backend engineer"
                     ), JdAlignmentResult.class);
+                    AgenticInterviewStagePlanResult directStageResult = adapter.invoke("InterviewCoordinatorAgent", "coordinate", java.util.Map.of(
+                            "memoryId", "interview:u1:s-agentic",
+                            "alignment", directAlignment
+                    ), AgenticInterviewStagePlanResult.class);
+                    InterviewPlan directPlan = adapter.invoke("InterviewOrchestratorService", "plan", java.util.Map.of(
+                            "sessionId", "s-agentic",
+                            "cv", CvBO.builder().id(7L).summary("Java Redis backend").build(),
+                            "jobDescription", "Java Redis backend engineer",
+                            "alignment", directAlignment,
+                            "stages", directStageResult.stages(),
+                            "firstQuestion", "candidate first question"
+                    ), InterviewPlan.class);
                     TechnicalQuestionSuggestion directTechnicalQuestion = adapter.invoke("JavaTechInterviewerAgent", "generateQuestion", java.util.Map.of(
                             "memoryId", "interview:u1:s-agentic",
                             "cv", CvBO.builder().id(7L).summary("Java Redis backend").build(),
                             "jobDescription", "Java Redis backend engineer",
                             "alignment", directAlignment,
-                            "stages", java.util.List.of(InterviewStagePlan.builder()
-                                    .stageName("AGENTIC_JD_ALIGNMENT")
-                                    .goal("Validate JD fit")
-                                    .questionSeeds(java.util.List.of("Java", "Redis"))
-                                    .build()),
+                            "stages", directStageResult.stages(),
                             "skillContext", "question probing skill"
                     ), TechnicalQuestionSuggestion.class);
                     ReflectionResult directReflection = adapter.invoke("InterviewReflectorAgent", "reflect", java.util.Map.of(
@@ -86,6 +94,9 @@ class AgenticInterviewPlanningSpringWiringIT {
                     ), ReflectionResult.class);
 
                     assertThat(directAlignment.summary()).contains("Agentic JD alignment");
+                    assertThat(directStageResult.stages()).extracting(InterviewStagePlan::stageName)
+                            .contains("AGENTIC_JD_ALIGNMENT", "AGENTIC_TECH_DEPTH");
+                    assertThat(directPlan.firstQuestion()).contains("Agentic first question");
                     assertThat(directTechnicalQuestion.question()).contains("Agentic JavaTech question");
                     assertThat(directReflection.feedback()).contains("Agentic reflection");
                     assertThat(hybridMemory.messages("interview:u1:s-agentic"))

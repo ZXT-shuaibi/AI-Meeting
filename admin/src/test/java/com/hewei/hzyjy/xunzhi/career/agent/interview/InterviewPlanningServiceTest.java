@@ -129,6 +129,32 @@ class InterviewPlanningServiceTest {
         assertTrue(plan.firstQuestion().contains("Please explain one project where you used java"));
     }
 
+    @Test
+    void planningFallsBackWhenAiStagesArePartiallyParsableButNotMultiStage() {
+        ScriptedPlanningAiGateway aiGateway = new ScriptedPlanningAiGateway(
+                "Fallback alignment summary",
+                """
+                        {"stages":[
+                          {"stageName":"ONLY_STAGE","goal":"Too narrow","questionSeeds":["Redis"]},
+                          {"stageName":"","goal":"Missing stage name","questionSeeds":["Metrics"]}
+                        ]}
+                        """,
+                "{\"question\":\"\"}"
+        );
+        HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
+        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory);
+
+        InterviewPlan plan = service.plan(
+                "interview:s5",
+                "s5",
+                CvBO.builder().id(5L).summary("Java Redis project ownership").build(),
+                "Java Redis backend");
+
+        assertEquals(List.of("JD_ALIGNMENT", "JAVA_TECH_DEPTH", "PROJECT_REFLECTION"),
+                plan.stages().stream().map(InterviewStagePlan::stageName).toList());
+        assertTrue(plan.firstQuestion().contains("Please explain one project where you used java"));
+    }
+
     private static class ScriptedPlanningAiGateway implements AiGateway {
         private final String alignmentResponse;
         private final String stageResponse;

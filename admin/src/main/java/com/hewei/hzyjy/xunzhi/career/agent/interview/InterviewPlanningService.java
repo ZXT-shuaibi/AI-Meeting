@@ -151,7 +151,7 @@ public class InterviewPlanningService {
                         + "\nJD alignment:\n" + alignment)
                 .build()).content();
         List<InterviewStagePlan> aiStages = parseStages(response);
-        if (!aiStages.isEmpty()) {
+        if (isUsableMultiStagePlan(aiStages)) {
             chatMemory.add(memoryId, MemoryMessage.builder()
                     .role(MemoryRole.ASSISTANT)
                     .content("Interview coordination stages: " + aiStages)
@@ -274,6 +274,20 @@ public class InterviewPlanningService {
                 .map(json -> safe(json.getString("question")).trim())
                 .filter(value -> !value.isBlank())
                 .orElse("");
+    }
+
+    private boolean isUsableMultiStagePlan(List<InterviewStagePlan> stages) {
+        if (stages == null || stages.size() < 2) {
+            return false;
+        }
+        long distinctStageNames = stages.stream()
+                .map(InterviewStagePlan::stageName)
+                .map(this::safe)
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .count();
+        return distinctStageNames >= 2;
     }
 
     private int heuristicAnswerScore(String userAnswer) {
