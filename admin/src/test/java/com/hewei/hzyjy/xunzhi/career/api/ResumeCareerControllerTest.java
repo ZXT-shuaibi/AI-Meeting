@@ -106,6 +106,22 @@ class ResumeCareerControllerTest {
         verify(service).retryParseTask(7L, "task-1");
     }
 
+    @Test
+    void listParseTasksUsesCurrentUserScopeAndOptionalStatus() {
+        ResumeApplicationService service = mock(ResumeApplicationService.class);
+        ResumeCareerController controller = new ResumeCareerController(service, Runnable::run);
+        UserContext user = new UserContext(7L, "candidate");
+        List<ResumeParseTaskResult> tasks = List.of(
+                parseTask("task-1", ResumeParseTaskStatus.PROCESSING),
+                parseTask("task-2", ResumeParseTaskStatus.COMPLETED)
+        );
+        when(service.listParseTasks(7L, "PROCESSING")).thenReturn(tasks);
+
+        assertEquals(tasks, controller.listParseTasks("PROCESSING", user).getData());
+
+        verify(service).listParseTasks(7L, "PROCESSING");
+    }
+
     private ResumeParseTaskResult parseTask(String taskId, ResumeParseTaskStatus status) {
         return new ResumeParseTaskResult(taskId, 7L, status.name(), status.message(), 5, 65L, null,
                 "resume.txt", 4L, "text/plain", "local-snapshot", taskId, null, null,

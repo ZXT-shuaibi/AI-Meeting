@@ -234,6 +234,45 @@ class ResumeApplicationServiceTest {
     }
 
     @Test
+    void renderResumeAndStoreWritesArtifactToObjectStorage() {
+        CvBO cv = CvBO.builder()
+                .id(22L)
+                .userId(7L)
+                .name("candidate")
+                .summary("AI-Meeting JobSpark fusion")
+                .build();
+        ResumeStore store = mock(ResumeStore.class);
+        when(store.findByIdAndUserId(22L, 7L)).thenReturn(Optional.of(cv));
+        ResumeRenderService renderService = mock(ResumeRenderService.class);
+        when(renderService.renderPdf(cv)).thenReturn(new ResumeRenderArtifact(
+                "pdf",
+                "candidate.pdf",
+                "application/pdf",
+                "",
+                "PDF-BYTES".getBytes(StandardCharsets.UTF_8)
+        ));
+        InMemoryResumeObjectStorage objectStorage = new InMemoryResumeObjectStorage();
+        ResumeApplicationService service = service(
+                store,
+                mock(ResumeRagService.class),
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> null,
+                renderService,
+                new InMemoryResumeParseTaskStore(),
+                Runnable::run,
+                objectStorage
+        );
+
+        ResumeRenderStorageResult result = service.renderResumeAndStore(7L, 22L, "pdf");
+
+        assertEquals("pdf", result.artifact().format());
+        assertEquals("memory-object-storage", result.storage().provider());
+        org.junit.jupiter.api.Assertions.assertTrue(result.storage().key().contains("career/resume/render/7/22/"));
+        org.junit.jupiter.api.Assertions.assertTrue(objectStorage.contains(result.storage().key()));
+        verify(renderService).renderPdf(cv);
+    }
+
+    @Test
     void renderResumeRejectsUnsupportedFormat() {
         ResumeStore store = mock(ResumeStore.class);
         when(store.findByIdAndUserId(21L, 7L)).thenReturn(Optional.of(CvBO.builder()

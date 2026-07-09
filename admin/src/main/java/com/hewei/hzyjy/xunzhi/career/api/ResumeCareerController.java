@@ -11,6 +11,7 @@ import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeEmbeddingResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeParseTaskResult;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeRenderStorageResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeUploadResult;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.common.convention.annotation.CurrentUser;
@@ -29,6 +30,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -76,6 +78,13 @@ public class ResumeCareerController {
         return Results.success(resumeApplicationService.getParseTask(currentUser.getUserId(), taskId));
     }
 
+    @GetMapping("/resumes/parse-tasks")
+    public Result<java.util.List<ResumeParseTaskResult>> listParseTasks(
+            @RequestParam(value = "status", required = false) String status,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.listParseTasks(currentUser.getUserId(), status));
+    }
+
     @PostMapping("/resumes/parse-tasks/{taskId}/cancel")
     public Result<ResumeParseTaskResult> cancelParseTask(
             @PathVariable String taskId,
@@ -120,6 +129,14 @@ public class ResumeCareerController {
                                 .build()
                                 .toString())
                 .body(artifact.bytes());
+    }
+
+    @PostMapping("/resumes/{resumeId}/render/{format}/store")
+    public Result<ResumeRenderStorageResult> renderResumeAndStore(
+            @PathVariable Long resumeId,
+            @PathVariable String format,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.renderResumeAndStore(currentUser.getUserId(), resumeId, format));
     }
 
     @PostMapping("/jobs/match-resumes")

@@ -326,6 +326,20 @@ public class ResumeApplicationService {
         };
     }
 
+    public ResumeRenderStorageResult renderResumeAndStore(Long userId, Long resumeId, String format) {
+        if (!resumeObjectStorage.enabled()) {
+            throw new IllegalStateException("Resume object storage is disabled");
+        }
+        ResumeRenderArtifact artifact = renderResume(userId, resumeId, format);
+        ResumeObjectStorageResult storage = resumeObjectStorage.put(
+                renderObjectStorageKey(userId, resumeId, artifact),
+                artifact.bytes(),
+                artifact.contentType(),
+                artifact.filename()
+        );
+        return new ResumeRenderStorageResult(artifact, storage);
+    }
+
 
     private ResumeEmbeddingResult embeddingOwned(Long userId, Long resumeId, boolean failOnError) {
         CvBO cv = getResume(userId, resumeId);
@@ -494,6 +508,13 @@ public class ResumeApplicationService {
 
     private String objectStorageKey(String taskId, String originalFilename) {
         return "career/resume/parse-task/" + taskId + "/" + sanitizeObjectName(originalFilename);
+    }
+
+    private String renderObjectStorageKey(Long userId, Long resumeId, ResumeRenderArtifact artifact) {
+        String owner = userId == null ? "anonymous" : String.valueOf(userId);
+        String id = resumeId == null ? "unknown" : String.valueOf(resumeId);
+        String filename = artifact == null ? "resume" : sanitizeObjectName(artifact.filename());
+        return "career/resume/render/" + owner + "/" + id + "/" + UUID.randomUUID() + "/" + filename;
     }
 
     private String sanitizeObjectName(String originalFilename) {
