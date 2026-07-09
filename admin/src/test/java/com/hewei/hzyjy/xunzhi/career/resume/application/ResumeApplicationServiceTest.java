@@ -11,6 +11,8 @@ import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.ProjectBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
+import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
+import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderService;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -196,6 +198,56 @@ class ResumeApplicationServiceTest {
         assertEquals("LangChain4j", result.cv().getSkills().get(0).getName());
     }
 
+    @Test
+    void renderResumeReturnsOwnedArtifactByFormat() {
+        CvBO cv = CvBO.builder()
+                .id(21L)
+                .userId(7L)
+                .name("candidate")
+                .title("Java Backend Engineer")
+                .summary("AI-Meeting JobSpark fusion")
+                .build();
+        ResumeStore store = mock(ResumeStore.class);
+        when(store.findByIdAndUserId(21L, 7L)).thenReturn(Optional.of(cv));
+        ResumeRenderService renderService = mock(ResumeRenderService.class);
+        when(renderService.renderMarkdown(cv)).thenReturn(new ResumeRenderArtifact(
+                "markdown",
+                "candidate.md",
+                "text/markdown;charset=UTF-8",
+                "# candidate\n\nAI-Meeting JobSpark fusion",
+                "# candidate\n\nAI-Meeting JobSpark fusion".getBytes(StandardCharsets.UTF_8)
+        ));
+        ResumeApplicationService service = service(store, mock(ResumeRagService.class), mock(CvOptimizationOrchestrator.class), renderService);
+
+        ResumeRenderArtifact artifact = service.renderResume(7L, 21L, "markdown");
+
+        assertEquals("markdown", artifact.format());
+        org.junit.jupiter.api.Assertions.assertTrue(artifact.filename().endsWith(".md"));
+        org.junit.jupiter.api.Assertions.assertTrue(artifact.content().contains("AI-Meeting JobSpark fusion"));
+        verify(store).findByIdAndUserId(21L, 7L);
+        verify(renderService).renderMarkdown(cv);
+        verify(renderService, never()).render(any());
+    }
+
+    @Test
+    void renderResumeRejectsUnsupportedFormat() {
+        ResumeStore store = mock(ResumeStore.class);
+        when(store.findByIdAndUserId(21L, 7L)).thenReturn(Optional.of(CvBO.builder()
+                .id(21L)
+                .userId(7L)
+                .name("candidate")
+                .summary("AI-Meeting")
+                .build()));
+        ResumeRenderService renderService = mock(ResumeRenderService.class);
+        ResumeApplicationService service = service(store, mock(ResumeRagService.class), mock(CvOptimizationOrchestrator.class), renderService);
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.renderResume(7L, 21L, "xlsx"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(ex.getMessage().contains("Unsupported resume render format"));
+        verify(renderService, never()).render(any());
+    }
+
     private ResumeApplicationService service(ResumeStore store, ResumeRagService ragService, CvOptimizationOrchestrator orchestrator) {
         return service(store, ragService, orchestrator, (userId, filename, text) -> null);
     }
@@ -204,7 +256,24 @@ class ResumeApplicationServiceTest {
             ResumeStore store,
             ResumeRagService ragService,
             CvOptimizationOrchestrator orchestrator,
+            ResumeRenderService renderService) {
+        return service(store, ragService, orchestrator, (userId, filename, text) -> null, renderService);
+    }
+
+    private ResumeApplicationService service(
+            ResumeStore store,
+            ResumeRagService ragService,
+            CvOptimizationOrchestrator orchestrator,
             ResumeStructuringService structuringService) {
+        return service(store, ragService, orchestrator, structuringService, new ResumeRenderService());
+    }
+
+    private ResumeApplicationService service(
+            ResumeStore store,
+            ResumeRagService ragService,
+            CvOptimizationOrchestrator orchestrator,
+            ResumeStructuringService structuringService,
+            ResumeRenderService renderService) {
         return new ResumeApplicationService(
                 store,
                 mock(JobMatchTaskStore.class),
@@ -215,6 +284,7 @@ class ResumeApplicationServiceTest {
                 new HybridCompactingChatMemory(request -> null, new InterviewRuleBasedScorer(), new DecisionIndex()),
                 structuringService,
                 new ResumePdfTextExtractor(),
+                renderService,
                 emptyProvider()
         );
     }

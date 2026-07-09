@@ -16,6 +16,8 @@
 - Structured resume aggregate `CvBO` and nested resume BOs are available.
 - Resume upload stores structured data through `ResumeStore` and triggers best-effort embedding immediately after save.
 - Text-based PDF resume parsing is wired through PDFBox 3.x with `RandomAccessReadBuffer` + `Loader.loadPDF(buffer)`, bounded by page and extracted-text limits.
+- First-stage multi-format resume delivery is wired from `CvBO -> Markdown -> HTML -> PDF/DOCX` and exposed through `GET /api/xunzhi/v1/resumes/{resumeId}/render/{format}` with owner-scoped lookup.
+- Resume rendering supports `markdown/html/pdf/docx` downloads. Markdown/HTML/DOCX preserve full structured resume content; PDF generation uses PDFBox with system CJK-font preference and character-level glyph fallback so missing fonts do not break delivery.
 - MySQL-first `MySqlResumeStore` is backed by in-memory fallback and enforces owner lookup through `findByIdAndUserId`.
 - RAG chunking uses overview / summary / skills / experience / project / education chunks with `user_id` and `resume_id` metadata.
 - Retrieval keeps HyDE, multi-query, hierarchical coarse recall, vector + BM25 fine recall, RRF fusion, context augmentation, DashScope rerank gateway, Redis cache, and BM25 fallback.
@@ -81,7 +83,7 @@
 
 The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, `skills/question-probing`, and the supplemental pasted JobSpark notes. Items marked "not fully fused" should not be claimed as complete resume highlights yet.
 
-1. Multi-format resume rendering is not fully fused. JobSpark's Markdown -> HTML -> PDF -> Word delivery pipeline (`CvRendererFacade`, template/font validation, openhtmltopdf rendering, DOCX output) is still not present as an AI-Meeting end-to-end API. Current AI-Meeting PDF work is parsing/upload extraction, not optimized-resume rendering.
+1. Multi-format resume rendering is first-stage fused, but not yet at full JobSpark fidelity. AI-Meeting now has an end-to-end owner-scoped render API for Markdown/HTML/PDF/DOCX, but it does not yet migrate JobSpark's FreeMarker template validation, CommonMark extension stack, openhtmltopdf CSS/PDF renderer, docx4j XHTML import, or configurable font/template profiles.
 2. JobSpark's async resume parsing task model is only partially fused. AI-Meeting upload currently parses and embeds inside the request/service flow with bounded files; it does not yet expose JobSpark-style persistent parse task status, cancel/retry, OSS-first file handoff, or resumable async parsing for long-running uploads.
 3. JobSpark Skill runtime is not fully fused. The `jd-alignment` and `question-probing` Markdown skills are reflected in prompts/tests, but there is no runtime `activate_skill`/tool-provider bridge that loads these skill files as callable tools for Agentic agents.
 4. `JavaTechInterviewerAgent` is not fully fused as a real Agentic question generator. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's interview agents are intentionally limited to planning/reflection decisions for now.
@@ -91,8 +93,8 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 
 ## Next Fusion Order
 
-1. Add the multi-format resume rendering pipeline first, because it is a visible JobSpark differentiator and completes the "optimize -> deliver" resume loop.
-2. Add persistent async resume parse tasks with task status/cancel/retry and object-storage handoff, because it turns upload/parse into a high-availability backend story.
+1. Add persistent async resume parse tasks with task status/cancel/retry and object-storage handoff, because it turns upload/parse into a high-availability backend story.
+2. Upgrade first-stage rendering to JobSpark-level high-fidelity templates if needed: FreeMarker/CommonMark/openhtmltopdf/docx4j plus configurable fonts and template validation.
 3. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
 4. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
 5. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
@@ -104,7 +106,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- Multi-format optimized-resume rendering, persistent async parse task cancellation, runtime Markdown Skill activation, and scanned-PDF OCR remain open follow-up migrations.
+- High-fidelity template rendering, persistent async parse task cancellation, runtime Markdown Skill activation, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 
@@ -126,5 +128,6 @@ mvn.cmd -pl admin "-Dtest=ResumeCareerControllerTest,AiTraceEventListenerTest" "
 mvn.cmd -pl admin "-Dtest=AiCvReviewerTest,InterviewPlanningServiceTest,Bm25ScorerTest,DecisionIndexTest,CvOptimizationOrchestratorTest,QdrantResumeVectorStoreTest,LangChain4jAgentAdapterTest,LangChain4jEmbeddingAdapterTest,CareerInterviewExecutionBridgeTest,ResumeRagServiceTest,ResumeApplicationServiceTest,CareerResumeUploadSizeFilterTest,ResumeCareerControllerTest,AiTraceEventListenerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -Pcareer-external-ai "-Dtest=AgenticCvOptimizationRuntimeIT,AgenticCvOptimizationSpringWiringIT,LangChain4jHybridMemoryAdapterIT,AgenticInterviewPlanningSpringWiringIT,InterviewPlanningServiceTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=ResumePdfTextExtractorTest,ResumeApplicationServiceTest,LangChain4jAgentAdapterTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin "-Dtest=ResumeRenderServiceTest,ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -DskipTests "-Denforcer.skip=true" compile
 ```

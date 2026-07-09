@@ -3,11 +3,16 @@ package com.hewei.hzyjy.xunzhi.career.api;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
 import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
+import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.common.convention.context.UserContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,6 +48,27 @@ class ResumeCareerControllerTest {
         taskExecutor.runNext();
 
         verify(service).optimize(7L, 11L, "Java backend JD");
+    }
+
+    @Test
+    void renderResumeReturnsDownloadResponseForRequestedFormat() {
+        ResumeApplicationService service = mock(ResumeApplicationService.class);
+        ResumeCareerController controller = new ResumeCareerController(service, Runnable::run);
+        UserContext user = new UserContext(7L, "candidate");
+        when(service.renderResume(7L, 11L, "markdown")).thenReturn(new ResumeRenderArtifact(
+                "markdown",
+                "candidate.md",
+                "text/markdown;charset=UTF-8",
+                "# candidate",
+                "# candidate".getBytes(StandardCharsets.UTF_8)
+        ));
+
+        ResponseEntity<byte[]> response = controller.renderResume(11L, "markdown", user);
+
+        assertEquals(MediaType.parseMediaType("text/markdown;charset=UTF-8"), response.getHeaders().getContentType());
+        assertEquals("# candidate", new String(response.getBody(), StandardCharsets.UTF_8));
+        org.junit.jupiter.api.Assertions.assertTrue(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).contains("candidate.md"));
+        verify(service).renderResume(7L, 11L, "markdown");
     }
 
     private static class ManualTaskExecutor implements TaskExecutor {

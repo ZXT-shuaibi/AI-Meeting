@@ -11,6 +11,7 @@ import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeEmbeddingResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeUploadResult;
+import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.common.convention.annotation.CurrentUser;
 import com.hewei.hzyjy.xunzhi.common.convention.context.UserContext;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Result;
@@ -18,7 +19,11 @@ import com.hewei.hzyjy.xunzhi.common.convention.result.Results;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,6 +36,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 @Validated
 @RestController
@@ -59,6 +65,31 @@ public class ResumeCareerController {
             @PathVariable Long resumeId,
             @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.embedding(currentUser.getUserId(), resumeId));
+    }
+
+    @GetMapping("/resumes/{resumeId}/render/{format}")
+    public ResponseEntity<byte[]> renderResume(
+            @PathVariable Long resumeId,
+            @PathVariable String format,
+            @CurrentUser UserContext currentUser) {
+        ResumeRenderArtifact artifact = resumeApplicationService.renderResume(currentUser.getUserId(), resumeId, format);
+        MediaType contentType;
+        try {
+            contentType = MediaType.parseMediaType(artifact.contentType());
+        } catch (Exception ex) {
+            contentType = MediaType.APPLICATION_OCTET_STREAM;
+        }
+        return ResponseEntity.ok()
+                .contentType(contentType)
+                .contentLength(artifact.bytes().length)
+                .cacheControl(CacheControl.noStore().mustRevalidate())
+                .header(HttpHeaders.PRAGMA, "no-cache")
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment()
+                                .filename(artifact.filename(), StandardCharsets.UTF_8)
+                                .build()
+                                .toString())
+                .body(artifact.bytes());
     }
 
     @PostMapping("/jobs/match-resumes")

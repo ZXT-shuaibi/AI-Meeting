@@ -15,6 +15,8 @@ import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
+import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
+import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -65,6 +67,7 @@ public class ResumeApplicationService {
     private final HybridCompactingChatMemory chatMemory;
     private final ResumeStructuringService resumeStructuringService;
     private final ResumePdfTextExtractor resumePdfTextExtractor;
+    private final ResumeRenderService resumeRenderService;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
@@ -183,6 +186,19 @@ public class ResumeApplicationService {
                 .metadata(Map.of("scene", "INTERVIEW_REFLECTION", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
         return result;
+    }
+
+    public ResumeRenderArtifact renderResume(Long userId, Long resumeId, String format) {
+        CvBO cv = getResume(userId, resumeId);
+        String normalized = format == null ? "" : format.trim().toLowerCase();
+        return switch (normalized) {
+            case "md", "markdown" -> resumeRenderService.renderMarkdown(cv);
+            case "html" -> resumeRenderService.renderHtml(cv);
+            case "pdf" -> resumeRenderService.renderPdf(cv);
+            case "docx", "word" -> resumeRenderService.renderDocx(cv);
+            default -> throw new IllegalArgumentException("Unsupported resume render format: " + format
+                    + ". Supported: markdown, html, pdf, docx");
+        };
     }
 
 
