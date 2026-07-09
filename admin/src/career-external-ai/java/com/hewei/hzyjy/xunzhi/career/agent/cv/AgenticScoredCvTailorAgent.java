@@ -14,8 +14,8 @@ public interface AgenticScoredCvTailorAgent {
 
     @Agent(description = "resume tailoring agent that rewrites existing facts based on review feedback.", outputKey = "cv")
     @OutputGuardrails(value = CareerJsonOutputGuardrail.class, maxRetries = 0)
-    @SystemMessage(CvPromptTemplates.TAILOR_AGENT_SYSTEM_PROMPT)
-    @UserMessage(CvPromptTemplates.TAILOR_AGENT_USER_PROMPT)
+    @SystemMessage(fromResource = CvPromptTemplates.TAILOR_SYSTEM_PROMPT_RESOURCE)
+    @UserMessage(fromResource = CvPromptTemplates.TAILOR_USER_PROMPT_RESOURCE)
     CvBO tailor(@V("cv") CvBO cv,
                 @V("cvReview") CvReview cvReview,
                 @V("referenceTemplates") List<String> referenceTemplates);

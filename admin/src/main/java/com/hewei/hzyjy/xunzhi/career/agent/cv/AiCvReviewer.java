@@ -51,8 +51,8 @@ public class AiCvReviewer implements CvReviewer {
         if (response == null || response.isBlank()) {
             response = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("RESUME_REVIEW")
-                    .systemPrompt(buildSystemPrompt())
-                    .userPrompt(CvPromptTemplates.REVIEWER_USER_PROMPT.formatted(jobDescription, cv, referenceTemplates))
+                    .systemPrompt(buildSystemPrompt(jobDescription))
+                    .userPrompt(CvPromptTemplates.reviewerUserPrompt(cv, jobDescription, referenceTemplates))
                     .build()).content();
         }
         double score = AgentResponseParser.score(response).orElseGet(() -> heuristicScore(cv, jobDescription));
@@ -136,11 +136,7 @@ public class AiCvReviewer implements CvReviewer {
         return (double) hit / tokens.size();
     }
 
-    private String buildSystemPrompt() {
-        String prompt = skillRegistry == null ? "" : skillRegistry.promptSection(CvPromptTemplates.REVIEWER_SKILL_NAME);
-        if (prompt.isBlank()) {
-            return CvPromptTemplates.REVIEWER_BASE_PROMPT;
-        }
-        return CvPromptTemplates.REVIEWER_BASE_PROMPT + "\n\n" + prompt;
+    private String buildSystemPrompt(String jobDescription) {
+        return CvPromptTemplates.reviewerSystemPrompt(skillRegistry, jobDescription);
     }
 }

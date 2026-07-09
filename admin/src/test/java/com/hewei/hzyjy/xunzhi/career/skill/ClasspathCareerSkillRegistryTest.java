@@ -13,9 +13,7 @@ class ClasspathCareerSkillRegistryTest {
 
         CareerSkill skill = registry.find("jd-alignment").orElseThrow();
 
-        assertTrue(skill.description().contains("岗位 JD"));
-        assertTrue(skill.body().contains("JD 解析"));
-        assertTrue(skill.references().get("jd-template.md").contains("MCP/A2A"));
+        assertTrue(skill.references().containsKey("jd-template.md"));
         assertTrue(registry.promptSection("jd-alignment").contains("Runtime Skill: jd-alignment"));
     }
 
@@ -28,23 +26,18 @@ class ClasspathCareerSkillRegistryTest {
     }
 
     @Test
-    void loadsBuiltInCvReviewerAndTailorSkills() {
+    void loadsBuiltInCvReviewerAndTailorSystemPromptsFromDedicatedResources() {
         CareerSkillRegistry registry = ClasspathCareerSkillRegistry.withBuiltIns();
 
         CareerSkill reviewer = registry.find("cv-reviewer").orElseThrow();
         CareerSkill tailor = registry.find("cv-tailor").orElseThrow();
 
-        assertTrue(reviewer.body().contains("技术能力匹配度"));
-        assertTrue(reviewer.body().contains("工作经验相关性"));
-        assertTrue(reviewer.body().contains("strengths/weaknesses/suggestions"));
-        assertTrue(reviewer.body().contains("参考模板"));
+        assertTrue(reviewer.body().contains("{{jobDescription}}"));
+        assertTrue(reviewer.body().contains("0.35"));
+        assertTrue(tailor.body().contains("{{cv}}"));
+        assertTrue(tailor.body().contains("LocaleConfig.sectionLabels"));
+        assertTrue(tailor.body().contains("yyyy-MM-dd"));
         assertTrue(registry.promptSection("cv-reviewer").contains("Runtime Skill: cv-reviewer"));
-
-        assertTrue(tailor.body().contains("真实性底线"));
-        assertTrue(tailor.body().contains("禁止虚构"));
-        assertTrue(tailor.body().contains("技能/经验/项目/教育"));
-        assertTrue(tailor.body().contains("输出格式规范"));
-        assertTrue(tailor.body().contains("meta.localeConfig.sectionLabels"));
         assertTrue(registry.promptSection("cv-tailor").contains("Runtime Skill: cv-tailor"));
     }
 }

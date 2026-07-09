@@ -51,8 +51,8 @@ public class AiScoredCvTailor implements ScoredCvTailor {
         if (response == null || response.isBlank()) {
             response = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("RESUME_TAILOR")
-                    .systemPrompt(buildSystemPrompt())
-                    .userPrompt(CvPromptTemplates.TAILOR_USER_PROMPT.formatted(cv, review, referenceTemplates))
+                    .systemPrompt(buildSystemPrompt(cv))
+                    .userPrompt(CvPromptTemplates.tailorUserPrompt(cv, review, referenceTemplates))
                     .build()).content();
         }
         JSONObject json = AgentResponseParser.jsonObject(response).orElse(null);
@@ -75,7 +75,7 @@ public class AiScoredCvTailor implements ScoredCvTailor {
         try {
             return gateway.invoke("ScoredCvTailor", "tailor", Map.of(
                     "cv", cv,
-                    "review", review,
+                    "cvReview", review,
                     "referenceTemplates", referenceTemplates == null ? List.of() : referenceTemplates
             ), String.class);
         } catch (Exception ex) {
@@ -108,11 +108,7 @@ public class AiScoredCvTailor implements ScoredCvTailor {
         return null;
     }
 
-    private String buildSystemPrompt() {
-        String prompt = skillRegistry == null ? "" : skillRegistry.promptSection(CvPromptTemplates.TAILOR_SKILL_NAME);
-        if (prompt.isBlank()) {
-            return CvPromptTemplates.TAILOR_BASE_PROMPT;
-        }
-        return CvPromptTemplates.TAILOR_BASE_PROMPT + "\n\n" + prompt;
+    private String buildSystemPrompt(CvBO cv) {
+        return CvPromptTemplates.tailorSystemPrompt(skillRegistry, cv);
     }
 }

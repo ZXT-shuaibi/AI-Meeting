@@ -10,6 +10,7 @@ import com.hewei.hzyjy.xunzhi.career.observability.AiInvocationCompletedEvent;
 import com.hewei.hzyjy.xunzhi.career.observability.AiInvocationStartedEvent;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.skill.ClasspathCareerSkillRegistry;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
@@ -19,7 +20,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.core.io.ClassPathResource;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -114,20 +118,16 @@ class AgenticCvOptimizationSpringWiringIT {
         String tailorPrompt = systemPrompt(AgenticScoredCvTailorAgent.class, "tailor");
 
         assertThat(reviewerPrompt)
-                .contains("技术能力匹配度 (权重: 35%)")
-                .contains("工作经验相关性 (权重: 30%)")
-                .contains("项目经验价值 (权重: 25%)")
-                .contains("教育背景与认证 (权重: 10%)")
-                .contains("strengths/weaknesses/suggestions")
-                .contains("参考模板");
+                .isEqualTo(ClasspathCareerSkillRegistry.withBuiltIns().find(CvPromptTemplates.REVIEWER_SKILL_NAME).orElseThrow().body())
+                .contains("(strengths)")
+                .contains("(weaknesses)")
+                .contains("(suggestions)")
+                .contains("0.35");
 
         assertThat(tailorPrompt)
-                .contains("真实性底线")
-                .contains("禁止虚构")
-                .contains("技能/经验/项目/教育")
-                .contains("审核反馈")
+                .isEqualTo(ClasspathCareerSkillRegistry.withBuiltIns().find(CvPromptTemplates.TAILOR_SKILL_NAME).orElseThrow().body())
                 .contains("CvBO")
-                .contains("meta.localeConfig.sectionLabels")
+                .contains("LocaleConfig.sectionLabels")
                 .contains("yyyy-MM-dd");
     }
 
@@ -136,8 +136,21 @@ class AgenticCvOptimizationSpringWiringIT {
                 .filter(method -> method.getName().equals(methodName))
                 .findFirst()
                 .map(method -> method.getAnnotation(SystemMessage.class))
-                .map(annotation -> String.join("\n", annotation.value()))
+                .map(annotation -> {
+                    if (annotation.fromResource().isBlank()) {
+                        return String.join("\n", annotation.value());
+                    }
+                    return resourceContent(annotation.fromResource());
+                })
                 .orElseThrow();
+    }
+
+    private String resourceContent(String path) {
+        try {
+            return new ClassPathResource(path).getContentAsString(StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to read prompt resource: " + path, ex);
+        }
     }
 
     private static class RecordingEventPublisher implements ApplicationEventPublisher {

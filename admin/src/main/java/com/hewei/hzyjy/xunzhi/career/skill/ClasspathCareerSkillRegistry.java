@@ -20,10 +20,10 @@ public class ClasspathCareerSkillRegistry implements CareerSkillRegistry {
 
     public static ClasspathCareerSkillRegistry withBuiltIns() {
         Map<String, CareerSkill> loaded = new LinkedHashMap<>();
-        loadSkill(loaded, "cv-reviewer", List.of());
-        loadSkill(loaded, "cv-tailor", List.of());
-        loadSkill(loaded, "jd-alignment", List.of("jd-template.md"));
-        loadSkill(loaded, "question-probing", List.of("probing-strategies.md"));
+        loadSkill(loaded, "cv-reviewer", "system-prompt.md", List.of());
+        loadSkill(loaded, "cv-tailor", "system-prompt.md", List.of());
+        loadSkill(loaded, "jd-alignment", "SKILL.md", List.of("jd-template.md"));
+        loadSkill(loaded, "question-probing", "SKILL.md", List.of("probing-strategies.md"));
         return new ClasspathCareerSkillRegistry(loaded);
     }
 
@@ -55,9 +55,10 @@ public class ClasspathCareerSkillRegistry implements CareerSkillRegistry {
         return builder.toString();
     }
 
-    private static void loadSkill(Map<String, CareerSkill> loaded, String name, List<String> references) {
-        Optional<String> body = read(BASE_PATH + name + "/SKILL.md");
-        if (body.isEmpty()) {
+    private static void loadSkill(Map<String, CareerSkill> loaded, String name, String bodyFileName, List<String> references) {
+        Optional<String> metadata = read(BASE_PATH + name + "/SKILL.md");
+        Optional<String> body = read(BASE_PATH + name + "/" + bodyFileName);
+        if (metadata.isEmpty() && body.isEmpty()) {
             return;
         }
         Map<String, String> referenceContents = new LinkedHashMap<>();
@@ -65,7 +66,9 @@ public class ClasspathCareerSkillRegistry implements CareerSkillRegistry {
             read(BASE_PATH + name + "/references/" + reference)
                     .ifPresent(content -> referenceContents.put(reference, content));
         }
-        loaded.put(name, new CareerSkill(name, parseDescription(body.get()), body.get(), referenceContents));
+        String metadataBody = metadata.orElse("");
+        String resolvedBody = body.orElse(metadataBody);
+        loaded.put(name, new CareerSkill(name, parseDescription(metadataBody), resolvedBody, referenceContents));
     }
 
     private static Optional<String> read(String path) {

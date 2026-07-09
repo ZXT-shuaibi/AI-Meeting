@@ -14,8 +14,8 @@ public interface AgenticCvReviewAgent {
 
     @Agent(description = "Resume review agent that scores JD fit and produces optimization feedback.", outputKey = "cvReview")
     @OutputGuardrails(value = CareerJsonOutputGuardrail.class, maxRetries = 0)
-    @SystemMessage(CvPromptTemplates.REVIEWER_AGENT_SYSTEM_PROMPT)
-    @UserMessage(CvPromptTemplates.REVIEWER_AGENT_USER_PROMPT)
+    @SystemMessage(fromResource = CvPromptTemplates.REVIEWER_SYSTEM_PROMPT_RESOURCE)
+    @UserMessage(fromResource = CvPromptTemplates.REVIEWER_USER_PROMPT_RESOURCE)
     CvReview review(@V("cv") CvBO cv,
                     @V("jobDescription") String jobDescription,
                     @V("referenceTemplates") List<String> referenceTemplates);
