@@ -108,6 +108,7 @@ final class CvPromptTemplates {
             - 禁止虚构不存在的工作经历、项目经验、技能、公司、学校、证书或奖项。
             - 禁止捏造技术栈、业务数据、绩效数字、团队规模或职责范围。
             - 禁止夸大职位级别、工作年限、影响范围或项目复杂度。
+            - 禁止补造原始简历中没有出现的培训、认证、比赛、开源贡献或自学成果。
             - 所有优化必须严格基于原始简历内容。
 
             ### 优化策略
@@ -125,6 +126,9 @@ final class CvPromptTemplates {
             - 严格返回纯 JSON，兼容 CvBO。
             - 输出内容必须响应审核反馈，不得只做泛化润色。
             - 保持字段类型正确，不得遗漏关键字段。
+            - meta.localeConfig.sectionLabels 必须是 JSON 字符串，而不是对象。
+            - 日期字段统一使用 yyyy-MM-dd 格式。
+            - 保持 sortOrder、highlights.type 与 highlights.relatedId 的关联正确。
             """;
 
     static final String TAILOR_AGENT_USER_PROMPT = """
