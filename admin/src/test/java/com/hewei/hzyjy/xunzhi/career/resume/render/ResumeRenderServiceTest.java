@@ -38,8 +38,13 @@ class ResumeRenderServiceTest {
         assertEquals("markdown", bundle.markdown().format());
         assertTrue(bundle.markdown().content().contains("# 张三"));
         assertTrue(bundle.markdown().content().contains("AI-Meeting 融合项目"));
+        assertTrue(bundle.markdown().content().contains("## 项目经验"));
+        assertTrue(bundle.markdown().content().contains("## 技能与亮点"));
         assertEquals("html", bundle.html().format());
         assertTrue(bundle.html().content().contains("<!DOCTYPE html>"));
+        assertTrue(bundle.html().content().contains("body class=\"resume-body"));
+        assertTrue(bundle.html().content().contains("class=\"container"));
+        assertTrue(bundle.html().content().contains("@page"));
         assertTrue(bundle.html().content().contains("AI-Meeting 融合项目"));
         assertEquals("pdf", bundle.pdf().format());
         assertTrue(bundle.pdf().bytes().length > 0);
@@ -48,6 +53,21 @@ class ResumeRenderServiceTest {
 
         assertTrue(pdfText(bundle.pdf().bytes()).contains("AI-Meeting"));
         assertTrue(docxText(bundle.docx().bytes()).contains("AI-Meeting 融合项目"));
+    }
+
+    @Test
+    void exposesJobSparkStyleRendererFacadePipeline() {
+        CvRendererFacade facade = new CvRendererFacade();
+
+        String markdown = facade.toMarkdown(sampleCv());
+        String html = facade.toHtmlFromMarkdown(markdown);
+
+        assertTrue(markdown.contains("## 个人摘要"));
+        assertTrue(markdown.contains("## 项目经验"));
+        assertTrue(markdown.contains("## 技能与亮点"));
+        assertTrue(html.contains("body class=\"resume-body"));
+        assertTrue(html.contains("<div class=\"container"));
+        assertTrue(html.contains("@page"));
     }
 
     @Test
@@ -60,6 +80,34 @@ class ResumeRenderServiceTest {
 
         assertTrue(pdf.length > 0);
         assertTrue(pdfText(pdf).contains("AI-Meeting"));
+    }
+
+    @Test
+    void rendersUnnamedResumeWithStableFallbackTitle() {
+        CvBO cv = CvBO.builder()
+                .summary("缺少姓名时仍应可导出，避免解析不完整导致交付中断。")
+                .build();
+
+        ResumeRenderArtifact markdown = renderService.renderMarkdown(cv);
+
+        assertTrue(markdown.content().contains("# 未命名简历"));
+        assertEquals("resume.md", markdown.filename());
+    }
+
+    @Test
+    void pdfRenderingPreservesChineseWhenCjkFontIsAvailable() throws Exception {
+        Path font = firstExistingFont(List.of(
+                Path.of("C:/Windows/Fonts/simhei.ttf"),
+                Path.of("C:/Windows/Fonts/Deng.ttf"),
+                Path.of("C:/Windows/Fonts/NotoSansSC-VF.ttf")
+        ));
+        ResumeRenderService service = new ResumeRenderService(List.of(font.toString()));
+
+        byte[] pdf = service.toPdf("# 中文简历\n\n## 项目经验\n\n- 融合简历导出链路");
+
+        String text = pdfText(pdf);
+        assertTrue(text.contains("中文简历"));
+        assertTrue(text.contains("项目经验"));
     }
 
     private String pdfText(byte[] bytes) throws Exception {
@@ -75,6 +123,13 @@ class ResumeRenderServiceTest {
                     .map(XWPFParagraph::getText)
                     .reduce("", (left, right) -> left + "\n" + right);
         }
+    }
+
+    private Path firstExistingFont(List<Path> candidates) {
+        return candidates.stream()
+                .filter(Files::isRegularFile)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("No CJK test font found"));
     }
 
     private CvBO sampleCv() {

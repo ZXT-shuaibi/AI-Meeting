@@ -20,13 +20,9 @@ public final class AgentResponseParser {
         if (response == null || response.isBlank()) {
             return Optional.empty();
         }
-        String candidate = response.trim();
-        if (!candidate.startsWith("{")) {
-            Matcher matcher = JSON_OBJECT.matcher(response);
-            if (!matcher.find()) {
-                return Optional.empty();
-            }
-            candidate = matcher.group();
+        String candidate = cleanedCandidate(response).orElse(null);
+        if (candidate == null) {
+            return Optional.empty();
         }
         try {
             return Optional.ofNullable(JSON.parseObject(candidate));
@@ -105,5 +101,25 @@ public final class AgentResponseParser {
             }
         }
         return null;
+    }
+
+    private static Optional<String> cleanedCandidate(String response) {
+        try {
+            String cleaned = CareerJsonResponseCleaner.cleanJsonResponse(response);
+            if (cleaned.startsWith("{")) {
+                return Optional.of(cleaned);
+            }
+        } catch (Exception ignored) {
+            // Fall back to the legacy extraction path below.
+        }
+        String candidate = response.trim();
+        if (candidate.startsWith("{")) {
+            return Optional.of(candidate);
+        }
+        Matcher matcher = JSON_OBJECT.matcher(response);
+        if (matcher.find()) {
+            return Optional.of(matcher.group());
+        }
+        return Optional.empty();
     }
 }

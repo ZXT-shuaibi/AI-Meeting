@@ -1,0 +1,119 @@
+/* JobSpark-style resume rendering stylesheet shared by HTML, PDF and DOCX backends. */
+:root {
+  --text-color: #222;
+  --muted-color: #666;
+  --accent-color: #0b5fff;
+  --border-color: #e5e7eb;
+}
+
+@page {
+  size: A4;
+  margin: 20mm 15mm 20mm 15mm;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body.resume-body {
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "SimSun", sans-serif;
+  color: var(--text-color);
+  line-height: 1.5;
+  font-size: 12.5pt;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.container.two-column {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+}
+
+.show-avatar .avatar {
+  display: block;
+}
+
+.hide-avatar .avatar {
+  display: none;
+}
+
+.show-social .social {
+  display: block;
+}
+
+.hide-social .social {
+  display: none;
+}
+
+h1,
+h2,
+h3 {
+  color: #111;
+  margin: 0.25em 0 0.4em 0;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 22pt;
+  font-weight: 700;
+  border-bottom: 2px solid var(--border-color);
+  padding-bottom: 8px;
+}
+
+h2 {
+  font-size: 16pt;
+  font-weight: 600;
+  margin-top: 14px;
+  border-left: 3px solid var(--accent-color);
+  padding-left: 8px;
+}
+
+h3 {
+  font-size: 13.5pt;
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+ul {
+  margin: 0.4em 0 0.6em 1.2em;
+  padding: 0;
+}
+
+ul li {
+  margin: 0.2em 0;
+}
+
+a {
+  color: var(--accent-color);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent-color);
+}
+
+h2,
+h3 {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+ul,
+p {
+  break-inside: auto;
+}
+
+@media print {
+  a {
+    color: black;
+    text-decoration: none;
+    border-bottom: none;
+  }
+
+  .container {
+    max-width: unset;
+  }
+}
