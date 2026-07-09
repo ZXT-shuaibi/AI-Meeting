@@ -94,6 +94,7 @@ xunzhi-agent:
     api-key: ${XUNZHI_LANGCHAIN4J_API_KEY:${DASHSCOPE_API_KEY:}}
     chat-model: ${XUNZHI_LANGCHAIN4J_CHAT_MODEL:qwen-plus}
     embedding-model: ${XUNZHI_LANGCHAIN4J_EMBEDDING_MODEL:text-embedding-v3}
+    agentic-native-listeners-enabled: ${XUNZHI_LANGCHAIN4J_AGENTIC_NATIVE_LISTENERS_ENABLED:false}
     qdrant:
       enabled: ${XUNZHI_QDRANT_ENABLED:false}
       collection-name: ${XUNZHI_QDRANT_COLLECTION:xunzhi_resume}

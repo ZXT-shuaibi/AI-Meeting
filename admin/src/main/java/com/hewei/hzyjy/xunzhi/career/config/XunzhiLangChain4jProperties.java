@@ -17,6 +17,12 @@ public class XunzhiLangChain4jProperties {
 
     private String embeddingModel = "text-embedding-v3";
 
+    /**
+     * Keep false unless LangChain4j direct Agentic invocation is upgraded or wrapped
+     * to initialize its managed ThreadLocal before native listener/tool callbacks.
+     */
+    private boolean agenticNativeListenersEnabled = false;
+
     private Qdrant qdrant = new Qdrant();
 
     @Data

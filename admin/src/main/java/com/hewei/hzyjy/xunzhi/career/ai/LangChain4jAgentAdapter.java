@@ -7,6 +7,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.List;
@@ -38,11 +39,19 @@ public class LangChain4jAgentAdapter implements AgentRuntimeGateway {
             }
             return responseType.cast(result);
         } catch (Exception ex) {
+            Throwable cause = unwrapInvocationFailure(ex);
             if (tracePublisher != null) {
-                tracePublisher.failed(traceId, agentName, null, "langchain4j", null, start, ex);
+                tracePublisher.failed(traceId, agentName, null, "langchain4j", null, start, cause);
             }
-            throw new IllegalStateException("LangChain4j agent is unavailable: " + agentName + "." + methodName, ex);
+            throw new IllegalStateException("LangChain4j agent is unavailable: " + agentName + "." + methodName, cause);
         }
+    }
+
+    private Throwable unwrapInvocationFailure(Exception ex) {
+        if (ex instanceof InvocationTargetException invocationTargetException && invocationTargetException.getTargetException() != null) {
+            return invocationTargetException.getTargetException();
+        }
+        return ex;
     }
 
     private Object resolveAgent(String agentName) {
