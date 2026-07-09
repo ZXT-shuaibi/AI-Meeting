@@ -129,6 +129,12 @@ xunzhi-agent:
         JD_ALIGNMENT: true
         INTERVIEW_COORDINATION: true
         INTERVIEW_REFLECTION: true
+    async-task:
+      recovery:
+        enabled: ${XUNZHI_CAREER_ASYNC_TASK_RECOVERY_ENABLED:true}
+        stale-after-seconds: ${XUNZHI_CAREER_ASYNC_TASK_RECOVERY_STALE_AFTER_SECONDS:1800}
+        batch-size: ${XUNZHI_CAREER_ASYNC_TASK_RECOVERY_BATCH_SIZE:20}
+        fixed-delay-millis: ${XUNZHI_CAREER_ASYNC_TASK_RECOVERY_FIXED_DELAY_MILLIS:30000}
     storage:
       object-storage:
         enabled: ${XUNZHI_CAREER_OBJECT_STORAGE_ENABLED:false}

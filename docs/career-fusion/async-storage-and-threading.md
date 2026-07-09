@@ -18,6 +18,7 @@ AI-Meeting uses:
 - `ResumeObjectStorage` as the storage boundary.
 - `LocalResumeObjectStorage` as the built-in backend for OSS-style key/path handoff without cloud SDK dependency.
 - `AliyunOssResumeObjectStorage` as the cloud backend, following JobSpark's Alibaba OSS pattern with environment credentials, V4 signature, bucket auto-create, upload, and stream download.
+- `ResumeParseTaskRecoveryService` as the stale-task repair loop for `PROCESSING/ANALYZING/SAVING` tasks.
 - MySQL-first parse task persistence with in-memory fallback.
 
 ## Current Behavior
@@ -30,6 +31,14 @@ AI-Meeting uses:
 4. Persists task metadata with `storage_provider`, `storage_key`, and `file_path`.
 5. Enqueues background parse work.
 6. Worker reads from object storage when no inline snapshot is present; otherwise it uses the snapshot fallback.
+
+`ResumeParseTaskRecoveryService`:
+
+1. Runs on a scheduled delay controlled by `xunzhi-agent.career.async-task.recovery.*`.
+2. Finds active parse tasks whose `update_time` is older than the stale threshold.
+3. Requeues tasks with a recoverable local snapshot or object-storage key under the original `taskId`, so frontend status polling remains stable.
+4. Completes stale `SAVING` tasks with an existing `resumeId` without saving a duplicate resume, only replaying best-effort embedding and final status persistence.
+5. Marks tasks without recoverable file payload as `FAILED` instead of leaving them stuck forever.
 
 ## Operational Settings
 
@@ -51,6 +60,28 @@ Environment variables:
 $env:XUNZHI_CAREER_OBJECT_STORAGE_ENABLED="true"
 $env:XUNZHI_CAREER_OBJECT_STORAGE_PROVIDER="local"
 $env:XUNZHI_CAREER_OBJECT_STORAGE_BASE_DIR="D:\data\xunzhi-career-object-storage"
+```
+
+Tune stale parse task recovery:
+
+```yaml
+xunzhi-agent:
+  career:
+    async-task:
+      recovery:
+        enabled: true
+        stale-after-seconds: 1800
+        batch-size: 20
+        fixed-delay-millis: 30000
+```
+
+Environment variables:
+
+```powershell
+$env:XUNZHI_CAREER_ASYNC_TASK_RECOVERY_ENABLED="true"
+$env:XUNZHI_CAREER_ASYNC_TASK_RECOVERY_STALE_AFTER_SECONDS="1800"
+$env:XUNZHI_CAREER_ASYNC_TASK_RECOVERY_BATCH_SIZE="20"
+$env:XUNZHI_CAREER_ASYNC_TASK_RECOVERY_FIXED_DELAY_MILLIS="30000"
 ```
 
 Enable Alibaba Cloud OSS:
@@ -98,6 +129,6 @@ Any additional cloud backend should implement `ResumeObjectStorage` and preserve
 ## Known Limits
 
 - Local backend is not shared storage across nodes.
-- Alibaba OSS backend gives shared file handoff, but does not by itself provide queue-worker recovery after JVM death.
-- There is no queue-worker recovery scanner yet; if the JVM dies after task creation, a future worker repair task should requeue `PROCESSING/ANALYZING/SAVING` tasks that exceed a timeout.
+- Alibaba OSS backend gives shared file handoff, but does not by itself provide distributed worker ownership.
+- Stale-task recovery is safe for single active scheduler or mostly-idempotent demo deployments, but it does not yet use a distributed lock/lease to prevent two nodes from recovering the same stale task concurrently.
 - There is no outbox guarantee for every degraded write.

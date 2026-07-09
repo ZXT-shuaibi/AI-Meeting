@@ -26,6 +26,8 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -396,6 +398,107 @@ class ResumeApplicationServiceTest {
         assertEquals(1, taskExecutor.tasks.size());
     }
 
+    @Test
+    void recoverStaleParseTasksRequeuesOriginalTaskIdAndCompletesFromSnapshot() {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        InMemoryResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        Instant staleTime = Instant.now().minusSeconds(7200);
+        ResumeParseTaskRecord stale = parseTask("stale-task", ResumeParseTaskStatus.ANALYZING, staleTime, "Java Redis".getBytes(StandardCharsets.UTF_8));
+        parseTaskStore.save(stale);
+        ResumeApplicationService service = service(
+                store,
+                ragService,
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("recovered-cv").summary(text).build(),
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor
+        );
+        when(store.save(any())).thenAnswer(invocation -> ((CvBO) invocation.getArgument(0)).toBuilder().id(41L).userId(7L).build());
+        when(store.findByIdAndUserId(41L, 7L)).thenReturn(Optional.of(CvBO.builder().id(41L).userId(7L).name("recovered-cv").summary("Java Redis").build()));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+
+        int recovered = service.recoverStaleParseTasks(Duration.ofMinutes(30), 10);
+
+        assertEquals(1, recovered);
+        assertEquals(1, taskExecutor.tasks.size());
+        assertEquals(ResumeParseTaskStatus.ANALYZING.name(), service.getParseTask(7L, "stale-task").status());
+        taskExecutor.runNext();
+        ResumeParseTaskResult completed = service.getParseTask(7L, "stale-task");
+        assertEquals(ResumeParseTaskStatus.COMPLETED.name(), completed.status());
+        assertEquals(41L, completed.resumeId());
+    }
+
+    @Test
+    void recoverStaleParseTasksFailsClosedWhenPayloadIsMissing() {
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        InMemoryResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        ResumeParseTaskRecord staleWithoutPayload = parseTask(
+                "missing-payload",
+                ResumeParseTaskStatus.PROCESSING,
+                Instant.now().minusSeconds(7200),
+                new byte[0]
+        );
+        parseTaskStore.save(staleWithoutPayload);
+        ResumeApplicationService service = service(
+                mock(ResumeStore.class),
+                mock(ResumeRagService.class),
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("unused").summary(text).build(),
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor
+        );
+
+        int recovered = service.recoverStaleParseTasks(Duration.ofMinutes(30), 10);
+
+        assertEquals(1, recovered);
+        assertEquals(0, taskExecutor.tasks.size());
+        ResumeParseTaskResult failed = service.getParseTask(7L, "missing-payload");
+        assertEquals(ResumeParseTaskStatus.FAILED.name(), failed.status());
+        org.junit.jupiter.api.Assertions.assertTrue(failed.errorMessage().contains("missing recoverable file payload"));
+    }
+
+    @Test
+    void recoverStaleSavingTaskCompletesExistingResumeWithoutSavingDuplicate() {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        InMemoryResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        ResumeParseTaskRecord staleSaving = parseTask(
+                "saving-task",
+                ResumeParseTaskStatus.SAVING,
+                Instant.now().minusSeconds(7200),
+                new byte[0],
+                51L
+        );
+        parseTaskStore.save(staleSaving);
+        CvBO existing = CvBO.builder().id(51L).userId(7L).name("existing-cv").summary("Java Redis").build();
+        when(store.findByIdAndUserId(51L, 7L)).thenReturn(Optional.of(existing));
+        when(ragService.storeCvBO(existing)).thenReturn(List.of());
+        ResumeApplicationService service = service(
+                store,
+                ragService,
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("duplicate").summary(text).build(),
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor
+        );
+
+        int recovered = service.recoverStaleParseTasks(Duration.ofMinutes(30), 10);
+        taskExecutor.runNext();
+
+        assertEquals(1, recovered);
+        ResumeParseTaskResult completed = service.getParseTask(7L, "saving-task");
+        assertEquals(ResumeParseTaskStatus.COMPLETED.name(), completed.status());
+        assertEquals(51L, completed.resumeId());
+        verify(store, never()).save(any());
+        verify(ragService).storeCvBO(existing);
+    }
+
     private ResumeApplicationService service(ResumeStore store, ResumeRagService ragService, CvOptimizationOrchestrator orchestrator) {
         return service(store, ragService, orchestrator, (userId, filename, text) -> null);
     }
@@ -482,6 +585,33 @@ class ResumeApplicationServiceTest {
         void runNext() {
             tasks.remove(0).run();
         }
+    }
+
+    private ResumeParseTaskRecord parseTask(String taskId, ResumeParseTaskStatus status, Instant updateTime, byte[] snapshot) {
+        return parseTask(taskId, status, updateTime, snapshot, null);
+    }
+
+    private ResumeParseTaskRecord parseTask(String taskId, ResumeParseTaskStatus status, Instant updateTime, byte[] snapshot, Long resumeId) {
+        return new ResumeParseTaskRecord(
+                taskId,
+                7L,
+                status,
+                resumeId,
+                "resume.txt",
+                snapshot == null ? 0L : (long) snapshot.length,
+                "text/plain",
+                "upload",
+                snapshot == null || snapshot.length == 0 ? "local-snapshot" : "local-snapshot",
+                taskId,
+                null,
+                snapshot,
+                null,
+                null,
+                updateTime.minusSeconds(60),
+                status.terminal() ? updateTime : null,
+                updateTime.minusSeconds(120),
+                updateTime
+        );
     }
 
     private byte[] minimalDocx(String text) throws Exception {

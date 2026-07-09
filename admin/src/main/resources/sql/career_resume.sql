@@ -162,5 +162,6 @@ CREATE TABLE IF NOT EXISTS `career_resume_parse_task` (
   UNIQUE KEY `uk_task_id` (`task_id`),
   KEY `idx_user_task` (`user_id`, `task_id`),
   KEY `idx_user_status_update` (`user_id`, `status`, `update_time`),
+  KEY `idx_status_update` (`status`, `update_time`),
   KEY `idx_retry_of_task` (`retry_of_task_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career async resume parse task';

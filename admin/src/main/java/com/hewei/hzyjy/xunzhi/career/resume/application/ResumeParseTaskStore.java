@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.resume.application;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,4 +13,6 @@ public interface ResumeParseTaskStore {
     Optional<ResumeParseTaskRecord> findByTaskIdAndUserId(String taskId, Long userId);
 
     List<ResumeParseTaskRecord> findByUserId(Long userId, String status);
+
+    List<ResumeParseTaskRecord> findStaleActiveTasks(Instant updatedBefore, int limit);
 }

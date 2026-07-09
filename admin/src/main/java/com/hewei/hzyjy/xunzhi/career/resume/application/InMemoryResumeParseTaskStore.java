@@ -2,6 +2,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -36,6 +37,19 @@ public class InMemoryResumeParseTaskStore implements ResumeParseTaskStore {
                 .filter(task -> userId != null && userId.equals(task.userId()))
                 .filter(task -> status == null || status.isBlank() || task.status().name().equalsIgnoreCase(status))
                 .sorted(Comparator.comparing(ResumeParseTaskRecord::createTime).reversed())
+                .toList();
+    }
+
+    @Override
+    public List<ResumeParseTaskRecord> findStaleActiveTasks(Instant updatedBefore, int limit) {
+        if (updatedBefore == null || limit <= 0) {
+            return List.of();
+        }
+        return tasks.values().stream()
+                .filter(task -> task.status() != null && !task.status().terminal())
+                .filter(task -> task.updateTime() != null && task.updateTime().isBefore(updatedBefore))
+                .sorted(Comparator.comparing(ResumeParseTaskRecord::updateTime))
+                .limit(limit)
                 .toList();
     }
 }

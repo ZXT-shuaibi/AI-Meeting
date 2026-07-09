@@ -25,14 +25,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
-
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -42,8 +42,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
-
 import java.util.zip.ZipFile;
+
 @Slf4j
 @Service
 public class ResumeApplicationService {
@@ -289,6 +289,30 @@ public class ResumeApplicationService {
         return toParseTaskResult(retry);
     }
 
+    public int recoverStaleParseTasks(Duration staleAfter, int limit) {
+        Duration threshold = staleAfter == null || staleAfter.isNegative() || staleAfter.isZero()
+                ? Duration.ofMinutes(30)
+                : staleAfter;
+        int boundedLimit = Math.min(Math.max(limit, 1), 100);
+        Instant updatedBefore = Instant.now().minus(threshold);
+        List<ResumeParseTaskRecord> staleTasks = resumeParseTaskStore.findStaleActiveTasks(updatedBefore, boundedLimit);
+        int recovered = 0;
+        for (ResumeParseTaskRecord task : staleTasks) {
+            if (task == null || task.status() == null || task.status().terminal()) {
+                continue;
+            }
+            recovered++;
+            if (!hasRecoverablePayload(task)) {
+                resumeParseTaskStore.save(task.failed("Resume parse task recovery failed: missing recoverable file payload"));
+                continue;
+            }
+            ResumeParseTaskRecord queued = task.withStatus(task.status());
+            resumeParseTaskStore.save(queued);
+            careerTaskExecutor.execute(() -> processParseTask(queued.taskId()));
+        }
+        return recovered;
+    }
+
     public ResumeRenderArtifact renderResume(Long userId, Long resumeId, String format) {
         CvBO cv = getResume(userId, resumeId);
         String normalized = format == null ? "" : format.trim().toLowerCase();
@@ -314,6 +338,13 @@ public class ResumeApplicationService {
             return;
         }
         try {
+            if (task.status() == ResumeParseTaskStatus.SAVING && task.resumeId() != null) {
+                CvBO existing = resumeStore.findByIdAndUserId(task.resumeId(), task.userId())
+                        .orElseThrow(() -> new IllegalStateException("Resume parse recovery failed: saved resume not found"));
+                doEmbedding(existing, false);
+                resumeParseTaskStore.save(task.completed(existing.getId()));
+                return;
+            }
             task = task.withStatus(ResumeParseTaskStatus.ANALYZING);
             resumeParseTaskStore.save(task);
             CvBO parsed = parseUpload(task.userId(), multipartFromTask(task));
@@ -424,6 +455,13 @@ public class ResumeApplicationService {
             bytes = readObjectStorageSnapshot(task.storageKey());
         }
         return new SnapshotMultipartFile(task.originalFilename(), task.contentType(), bytes);
+    }
+
+    private boolean hasRecoverablePayload(ResumeParseTaskRecord task) {
+        if (task.status() == ResumeParseTaskStatus.SAVING && task.resumeId() != null) {
+            return true;
+        }
+        return task.fileSnapshot().length > 0 || (resumeObjectStorage.enabled() && StringUtils.hasText(task.storageKey()));
     }
 
     private byte[] readFileSnapshot(MultipartFile file) {

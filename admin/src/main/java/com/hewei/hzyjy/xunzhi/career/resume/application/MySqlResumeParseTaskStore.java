@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Primary
@@ -22,6 +23,11 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
 
     private final ObjectProvider<CareerResumeParseTaskMapper> mapperProvider;
     private final InMemoryResumeParseTaskStore fallbackStore;
+    private static final Set<String> ACTIVE_STATUSES = Set.of(
+            ResumeParseTaskStatus.PROCESSING.name(),
+            ResumeParseTaskStatus.ANALYZING.name(),
+            ResumeParseTaskStatus.SAVING.name()
+    );
 
     @Override
     public ResumeParseTaskRecord save(ResumeParseTaskRecord task) {
@@ -117,6 +123,32 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
             }
         }
         return fallbackStore.findByUserId(userId, status);
+    }
+
+    @Override
+    public List<ResumeParseTaskRecord> findStaleActiveTasks(Instant updatedBefore, int limit) {
+        if (updatedBefore == null || limit <= 0) {
+            return List.of();
+        }
+        CareerResumeParseTaskMapper mapper = mapperProvider.getIfAvailable();
+        if (mapper != null) {
+            try {
+                List<ResumeParseTaskRecord> tasks = mapper.selectList(Wrappers.<CareerResumeParseTaskDO>lambdaQuery()
+                                .in(CareerResumeParseTaskDO::getStatus, ACTIVE_STATUSES)
+                                .lt(CareerResumeParseTaskDO::getUpdateTime, toDate(updatedBefore))
+                                .eq(CareerResumeParseTaskDO::getDelFlag, 0)
+                                .orderByAsc(CareerResumeParseTaskDO::getUpdateTime)
+                                .last("limit " + Math.max(1, limit)))
+                        .stream()
+                        .map(this::fromRow)
+                        .toList();
+                tasks.forEach(fallbackStore::save);
+                return tasks;
+            } catch (Exception ex) {
+                log.warn("MySQL stale resume parse task lookup failed, using in-memory fallback.", ex);
+            }
+        }
+        return fallbackStore.findStaleActiveTasks(updatedBefore, limit);
     }
 
     private void toRow(ResumeParseTaskRecord task, CareerResumeParseTaskDO row) {

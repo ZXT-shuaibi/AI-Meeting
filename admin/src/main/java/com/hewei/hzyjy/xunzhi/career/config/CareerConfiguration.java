@@ -17,7 +17,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
         XunzhiLangChain4jProperties.class,
         CareerRagProperties.class,
         CareerObservabilityProperties.class,
-        CareerStorageProperties.class
+        CareerStorageProperties.class,
+        CareerAsyncTaskProperties.class
 })
 public class CareerConfiguration {
 

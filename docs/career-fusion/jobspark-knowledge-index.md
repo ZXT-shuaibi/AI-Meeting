@@ -20,7 +20,7 @@ This directory captures the JobSpark-Resume knowledge assets after fusion into A
 - Plan-Execute-Reflect interview planning maps to `InterviewPlanningService` and `CareerInterviewExecutionBridge`.
 - RAG maps to `ResumeRagService`, `QdrantResumeVectorStore`, BM25, RRF, DashScope rerank, and Redis cache.
 - Rendering maps to `CvRendererFacade`, `ResumeMarkdownService`, `PdfResumeRenderBackend`, and `DocxResumeRenderBackend`.
-- Async task state maps to `career_resume_parse_task`, `ResumeParseTaskStore`, and `ResumeApplicationService#uploadAsync`.
+- Async task state maps to `career_resume_parse_task`, `ResumeParseTaskStore`, `ResumeApplicationService#uploadAsync`, and `ResumeParseTaskRecoveryService` for stale active task repair.
 - OSS handoff maps to `ResumeObjectStorage` with built-in local and Alibaba Cloud OSS backends; the Alibaba backend is reflectively loaded so the default build is not coupled to the cloud SDK.
 - Observability maps to `AiTracePublisher`, Spring events, Redis hot traces, and MySQL cold traces.
 - ThreadLocal NPE mitigation maps to `LangChain4jAgenticSafetyPolicy` and adapter-level failure unwrapping.
