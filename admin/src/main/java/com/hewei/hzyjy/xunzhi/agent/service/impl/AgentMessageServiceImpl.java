@@ -10,6 +10,7 @@ import com.hewei.hzyjy.xunzhi.agent.application.AgentResolver;
 import com.hewei.hzyjy.xunzhi.agent.dao.entity.AgentPropertiesDO;
 import com.hewei.hzyjy.xunzhi.agent.service.AgentConversationService;
 import com.hewei.hzyjy.xunzhi.agent.service.AgentMessageService;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.common.enums.AgentErrorCodeEnum;
 import com.hewei.hzyjy.xunzhi.conversation.application.ConversationMessageHistoryService;
@@ -22,6 +23,7 @@ import com.hewei.hzyjy.xunzhi.toolkit.xunfei.XingChenAIClient;
 import com.hewei.hzyjy.xunzhi.user.api.io.req.UserMessageReqDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -32,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -50,6 +53,7 @@ public class AgentMessageServiceImpl implements AgentMessageService {
     private final ConversationMessagePersistenceService conversationMessagePersistenceService;
     private final ConversationStreamingSupport conversationStreamingSupport;
     private final ThreadPoolTaskExecutor threadPoolTaskExecutor;
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
 
     @Override
     public List<AgentMessageHistoryRespDTO> getConversationHistory(String sessionId) {
@@ -136,33 +140,7 @@ public class AgentMessageServiceImpl implements AgentMessageService {
                     if (agentProperties == null) {
                         throw new ClientException(AgentErrorCodeEnum.Agent_NULL);
                     }
-                    xingChenAIClient.chat(
-                            userMessage,
-                            sessionId,
-                            buildHistoryJson(historyMessages),
-                            true,
-                            new OutputStream() {
-                                @Override
-                                public void write(int b) {
-                                }
-
-                                @Override
-                                public void write(byte[] b, int off, int len) throws IOException {
-                                    String jsonChunk = new String(b, off, len);
-                                    emitter.send(SseEmitter.event().data(jsonChunk));
-                                    contentAccumulator.appendChunk(b);
-                                }
-
-                                @Override
-                                public void flush() {
-                                }
-                            },
-                            data -> {
-                            },
-                            agentProperties.getApiKey(),
-                            agentProperties.getApiSecret(),
-                            agentProperties.getApiFlowId()
-                    );
+                    invokeXingChenChat(sessionId, userMessage, historyMessages, emitter, contentAccumulator, agentProperties);
                 })
                 .assistantMessageSaver(payload -> conversationMessagePersistenceService.saveAgentAssistantMessage(
                         sessionId,
@@ -181,6 +159,61 @@ public class AgentMessageServiceImpl implements AgentMessageService {
                 })
                 .errorHandler(emitter::completeWithError)
                 .build());
+    }
+
+    private void invokeXingChenChat(
+            String sessionId,
+            String userMessage,
+            List<AgentMessageHistoryRespDTO> historyMessages,
+            SseEmitter emitter,
+            AIContentAccumulator contentAccumulator,
+            AgentPropertiesDO agentProperties) throws Exception {
+        String traceId = UUID.randomUUID().toString();
+        long start = System.currentTimeMillis();
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher != null) {
+            tracePublisher.started(traceId, "LEGACY_XINGCHEN_AGENT_CHAT", sessionId, "xingchen",
+                    agentProperties.getApiFlowId(), userMessage);
+        }
+        try {
+            xingChenAIClient.chat(
+                    userMessage,
+                    sessionId,
+                    buildHistoryJson(historyMessages),
+                    true,
+                    new OutputStream() {
+                        @Override
+                        public void write(int b) {
+                        }
+
+                        @Override
+                        public void write(byte[] b, int off, int len) throws IOException {
+                            String jsonChunk = new String(b, off, len);
+                            emitter.send(SseEmitter.event().data(jsonChunk));
+                            contentAccumulator.appendChunk(b);
+                        }
+
+                        @Override
+                        public void flush() {
+                        }
+                    },
+                    data -> {
+                    },
+                    agentProperties.getApiKey(),
+                    agentProperties.getApiSecret(),
+                    agentProperties.getApiFlowId()
+            );
+            if (tracePublisher != null) {
+                tracePublisher.completed(traceId, "LEGACY_XINGCHEN_AGENT_CHAT", sessionId, "xingchen",
+                        agentProperties.getApiFlowId(), start, contentAccumulator.getFullContent());
+            }
+        } catch (Exception ex) {
+            if (tracePublisher != null) {
+                tracePublisher.failed(traceId, "LEGACY_XINGCHEN_AGENT_CHAT", sessionId, "xingchen",
+                        agentProperties.getApiFlowId(), start, ex);
+            }
+            throw ex;
+        }
     }
 
     private String buildHistoryJson(List<AgentMessageHistoryRespDTO> historyMessages) {

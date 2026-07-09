@@ -10,16 +10,22 @@ import com.hewei.hzyjy.xunzhi.agent.dao.entity.AgentFileAssetDO;
 import com.hewei.hzyjy.xunzhi.agent.dao.entity.AgentPropertiesDO;
 import com.hewei.hzyjy.xunzhi.agent.dao.mapper.AgentFileAssetMapper;
 import com.hewei.hzyjy.xunzhi.agent.service.AgentFileAssetService;
+import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
+import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.common.enums.AgentErrorCodeEnum;
 import com.hewei.hzyjy.xunzhi.toolkit.xunfei.XingChenAIClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
 import java.util.Date;
+import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -33,6 +39,7 @@ public class AgentFileAssetServiceImpl extends ServiceImpl<AgentFileAssetMapper,
     private final XingChenAIClient xingChenAIClient;
     private final AgentResolver agentResolver;
     private final BusinessAgentResolver businessAgentResolver;
+    private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -50,12 +57,16 @@ public class AgentFileAssetServiceImpl extends ServiceImpl<AgentFileAssetMapper,
             throw new ClientException("agent api credentials are missing", AgentErrorCodeEnum.AGENT_SAVE_ERROR);
         }
 
+        String traceId = UUID.randomUUID().toString();
+        long uploadStart = System.currentTimeMillis();
         String fileUrl;
         try {
             fileUrl = xingChenAIClient.uploadFile(file, agentProperties.getApiKey(), agentProperties.getApiSecret());
+            publishUploadTrace(traceId, sessionId, agentProperties, file, bizType, fileUrl, true, uploadStart, null);
         } catch (Exception ex) {
             log.error("File upload to xingchen failed, agentId={}, fileName={}",
                     agentProperties.getId(), file.getOriginalFilename(), ex);
+            publishUploadTrace(traceId, sessionId, agentProperties, file, bizType, "FAILED", false, uploadStart, ex.getMessage());
             throw new ClientException(
                     "upload file to xingchen failed: " + ex.getMessage(),
                     ex,
@@ -124,5 +135,43 @@ public class AgentFileAssetServiceImpl extends ServiceImpl<AgentFileAssetMapper,
             return null;
         }
         return fileName.substring(idx + 1).toLowerCase();
+    }
+
+    private void publishUploadTrace(
+            String traceId,
+            String sessionId,
+            AgentPropertiesDO agentProperties,
+            MultipartFile file,
+            String bizType,
+            String output,
+            boolean success,
+            long startMillis,
+            String errorMessage) {
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher == null) {
+            return;
+        }
+        tracePublisher.tool(new AiToolExecutionEvent(
+                traceId,
+                StrUtil.blankToDefault(sessionId, "agent-file-upload"),
+                agentProperties == null || agentProperties.getId() == null ? null : String.valueOf(agentProperties.getId()),
+                "LEGACY_XINGCHEN_FILE_UPLOAD",
+                "xingchen-upload-file",
+                file == null ? null : normalizeFileName(file.getOriginalFilename()),
+                output,
+                success,
+                Math.max(0, System.currentTimeMillis() - startMillis),
+                0,
+                errorMessage,
+                Instant.now(),
+                Map.of(
+                        "agentId", agentProperties == null ? "" : String.valueOf(agentProperties.getId()),
+                        "agentName", agentProperties == null ? "" : StrUtil.blankToDefault(agentProperties.getAgentName(), ""),
+                        "flowId", agentProperties == null ? "" : StrUtil.blankToDefault(agentProperties.getApiFlowId(), ""),
+                        "bizType", StrUtil.blankToDefault(bizType, DEFAULT_BIZ_TYPE),
+                        "fileSize", file == null ? 0L : file.getSize(),
+                        "contentType", file == null ? "" : StrUtil.blankToDefault(file.getContentType(), "")
+                )
+        ));
     }
 }

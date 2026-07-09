@@ -42,6 +42,12 @@ Storage:
 - MySQL keeps cold invocation traces, tool executions, and session stats.
 - Completed/failed events update the existing trace id instead of inserting fragmented rows.
 
+Legacy AI coverage:
+
+- `UniversalAiChatHandler` publishes `LEGACY_AI_CHAT` invocation traces for Spring AI compatible OpenAI/DeepSeek/Spark chat.
+- `AgentMessageServiceImpl` publishes `LEGACY_XINGCHEN_AGENT_CHAT` invocation traces around XingChen workflow streaming chat.
+- `AgentFileAssetServiceImpl` publishes `LEGACY_XINGCHEN_FILE_UPLOAD` tool traces around XingChen file uploads.
+
 ## Safe Extension Rule
 
 If native LangChain4j listeners are needed later:
@@ -54,4 +60,4 @@ If native LangChain4j listeners are needed later:
 
 ## Current Limitation
 
-Observability is unified for career Agent and tool events, but not every legacy Spring AI/Xunfei call site has been wrapped with `AiTracePublisher`.
+Observability is unified for career Agent/tool events and the main legacy chat/file-upload paths. Xunfei media integrations such as realtime ASR and long-text TTS are still logged by their own services and are not yet wrapped with `AiTracePublisher`.
