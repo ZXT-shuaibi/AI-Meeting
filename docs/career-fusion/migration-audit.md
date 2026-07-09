@@ -37,7 +37,7 @@
 - Exit rule: `score > 0.8`, max iteration default 3.
 - On max iterations, the orchestrator returns the latest reviewed CV, not an unreviewed post-tailor version.
 - LLM/parse failure returns the latest usable result.
-- JobSpark's structured-output defense is partially fused in the default runtime through `CareerJsonResponseCleaner` + `AgentResponseParser`, covering Markdown code fences, trailing explanations with braces, embedded JSON, unescaped control characters, and earlier example JSON before CV review/tailor/reflection parsing.
+- JobSpark's structured-output defense is fused at both runtime layers: the default Spring AI/local facade path uses `CareerJsonResponseCleaner` + `AgentResponseParser`, and the `career-external-ai` LangChain4j Agentic interfaces declare `@OutputGuardrails(CareerJsonOutputGuardrail.class)` for CV review/tailor, JD alignment, interview coordination, orchestration, and reflection outputs.
 - The orchestrator deep-copies CV state between review/tailor rounds, preventing failed or low-score optimization from mutating the stored primary resume object in memory.
 - `ResumeApplicationService` only overwrites the primary stored resume and re-embeds when the score gate passes; failed or low-score optimization results are returned as draft output without corrupting the saved resume.
 - `AiCvReviewer` and `AiScoredCvTailor` try `AgentRuntimeGateway` first, then fall back to Spring AI/heuristics.
@@ -90,7 +90,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 
 1. Multi-format resume rendering is template-pipeline fused and has a real product loop. AI-Meeting now has `CvRendererFacade`, FreeMarker Markdown templates, CommonMark HTML, shared CSS, and owner-scoped Markdown/HTML/PDF/DOCX export. It is still not at full JobSpark high-fidelity backend parity because it intentionally keeps PDFBox/POI delivery backends instead of migrating openhtmltopdf CSS/PDF rendering, docx4j XHTML import, advanced template validation, and configurable font/template profiles.
 2. JobSpark's async resume parsing task model is first-stage fused. AI-Meeting now exposes persistent parse task status, cancel, retry, progress, owner isolation, and local snapshot/object-storage handoff metadata, but it does not yet integrate a real OSS client/upload pipeline or cross-node queue worker recovery.
-3. JobSpark's AOP/LangChain4j `OutputGuardrail` mechanism is not fully fused. The default runtime has centralized JSON cleaning before structure parsing, but `career-external-ai` Agentic interfaces are not yet annotated with LangChain4j `@OutputGuardrails`, and there is no profile-gated `CareerJsonOutputGuardrail` bean.
+3. JobSpark's AOP/LangChain4j structured-output defense is fused through framework-neutral JSON cleaning plus LangChain4j `@OutputGuardrails` on external Agentic interfaces. AI-Meeting intentionally does not patch third-party LangChain4j source; it keeps the defense at adapter/interface boundaries.
 4. LangChain4j Agentic ThreadLocal NPE framework patch is not migrated into third-party source. AI-Meeting currently reduces risk by not registering Agentic listeners on direct Agent calls, but if LangChain4j `AgentListener` is enabled later for observability, the call boundary still needs an explicit safe wrapper or listener-disable policy.
 5. JobSpark Skill runtime is not fully fused. The `jd-alignment` and `question-probing` Markdown skills are reflected in prompts/tests, but there is no runtime `activate_skill`/tool-provider bridge that loads these skill files as callable tools for Agentic agents.
 6. `JavaTechInterviewerAgent` is not fully fused as a real Agentic question generator. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's interview agents are intentionally limited to planning/reflection decisions for now.
@@ -101,15 +101,14 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 
 ## Next Fusion Order
 
-1. Add profile-gated LangChain4j `CareerJsonOutputGuardrail` annotations for external Agentic interfaces, while keeping default-runtime `CareerJsonResponseCleaner` as the framework-neutral fallback.
-2. Add an explicit LangChain4j Agentic safe-call/listener policy around `AgentRuntimeGateway` before enabling any Agentic listener for observability.
-3. Add real OSS upload/download integration for async parse task handoff if multi-node file processing is required.
-4. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
-5. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
-6. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
-7. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
-8. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
-9. Split JobSpark markdown/source notes into dedicated docs under `docs/career-fusion`.
+1. Add an explicit LangChain4j Agentic safe-call/listener policy around `AgentRuntimeGateway` before enabling any Agentic listener for observability.
+2. Add real OSS upload/download integration for async parse task handoff if multi-node file processing is required.
+3. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
+4. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
+5. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
+6. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
+7. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
+8. Split JobSpark markdown/source notes into dedicated docs under `docs/career-fusion`.
 
 ## Remaining Limitations
 
@@ -117,7 +116,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- LangChain4j annotation-level output guardrails, Agentic listener/ThreadLocal safe-call policy, real OSS-backed async file handoff, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, JobSpark topic docs, and scanned-PDF OCR remain open follow-up migrations.
+- Agentic listener/ThreadLocal safe-call policy, real OSS-backed async file handoff, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, JobSpark topic docs, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 
@@ -143,6 +142,7 @@ mvn.cmd -pl admin "-Dtest=ResumeRenderServiceTest,ResumeApplicationServiceTest,R
 mvn.cmd -pl admin "-Dtest=ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=AgentResponseParserTest,ResumeRenderServiceTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=AgentResponseParserTest,ResumeRenderServiceTest,ResumePdfTextExtractorTest,ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin -Pcareer-external-ai "-Dtest=CareerJsonOutputGuardrailAnnotationIT,AgentResponseParserTest,AgenticCvOptimizationRuntimeIT,AgenticInterviewPlanningSpringWiringIT" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -Pcareer-external-ai -DskipTests "-Denforcer.skip=true" compile
 mvn.cmd -pl admin -DskipTests "-Denforcer.skip=true" compile
 ```

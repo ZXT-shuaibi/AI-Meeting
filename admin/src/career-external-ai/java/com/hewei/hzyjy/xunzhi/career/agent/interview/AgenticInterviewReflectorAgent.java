@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.agent.interview;
 
+import com.hewei.hzyjy.xunzhi.career.agent.support.CareerJsonOutputGuardrail;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import dev.langchain4j.agentic.Agent;
 import dev.langchain4j.agentic.declarative.ChatMemoryProviderSupplier;
@@ -8,12 +9,14 @@ import dev.langchain4j.service.MemoryId;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
+import dev.langchain4j.service.guardrail.OutputGuardrails;
 
 import java.util.function.Function;
 
 public interface AgenticInterviewReflectorAgent {
 
     @Agent(description = "Interview reflector agent that scores answers and routes PROBE/NEXT/STAGE_FINISH/FINISH.", outputKey = "reflection")
+    @OutputGuardrails(value = CareerJsonOutputGuardrail.class, maxRetries = 0)
     @SystemMessage("""
             You are a technical interview reflection agent.
             Evaluate answer quality, then decide one of PROBE, NEXT, STAGE_FINISH, FINISH.

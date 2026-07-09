@@ -1,16 +1,19 @@
 package com.hewei.hzyjy.xunzhi.career.agent.interview;
 
+import com.hewei.hzyjy.xunzhi.career.agent.support.CareerJsonOutputGuardrail;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import dev.langchain4j.agentic.Agent;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
+import dev.langchain4j.service.guardrail.OutputGuardrails;
 
 import java.util.List;
 
 public interface AgenticInterviewOrchestratorAgent {
 
     @Agent(description = "Plan-Execute-Reflect interview planning orchestrator. It only plans; AI-Meeting executes.", outputKey = "interviewPlan")
+    @OutputGuardrails(value = CareerJsonOutputGuardrail.class, maxRetries = 0)
     @SystemMessage("""
             You are the planning layer of an AI interview system.
             Do not execute or persist interview state. AI-Meeting owns execution, locks, idempotency and snapshots.
