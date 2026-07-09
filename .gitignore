@@ -42,6 +42,7 @@ build/
 
 ### VS Code ###
 .vscode/
+.worktrees/
 
 ### Mac OS ###
 .DS_Store
