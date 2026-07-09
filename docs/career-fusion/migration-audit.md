@@ -77,6 +77,11 @@
 - `@EnableAsync` is enabled so event listeners can run asynchronously.
 - Career long-running work uses a dedicated `careerTaskExecutor`, isolating resume optimization SSE tasks from controller request threads.
 
+### Knowledge Assets
+
+- JobSpark source knowledge has been split into dedicated AI-Meeting fusion docs instead of being copied as a single README dump: `jobspark-knowledge-index.md`, `qdrant-rag-notes.md`, `async-storage-and-threading.md`, `agentic-threadlocal-and-observability.md`, `runtime-skill-assets.md`, and `rendering-and-pdf-notes.md`.
+- The docs explicitly separate migrated capabilities from future parity items such as cloud OSS SDK backend, runtime skill activation, JavaTechInterviewerAgent, high-fidelity openhtmltopdf/docx4j rendering, and OCR.
+
 ## High-Availability Status
 
 - Resume data, job match tasks, RAG chunks, fallback vectors, traces, and stats have MySQL persistence paths.
@@ -99,7 +104,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 6. `JavaTechInterviewerAgent` is not fully fused as a real Agentic question generator. AI-Meeting still owns actual question cache, answer submission, scoring, follow-up persistence, state machine, idempotency, and Single-flight; JobSpark's interview agents are intentionally limited to planning/reflection decisions for now.
 7. Observability is not yet universal across every legacy AI path. Career Agent events and tool executions are unified, but full automatic tracing still requires wiring all legacy Spring AI and Xunfei call sites into `AiTracePublisher`.
 8. Production-grade fail-closed persistence is not complete. Resume chunks, traces, memory, and decisions have MySQL/Redis paths, but there is no strict outbox or guaranteed replay for every degraded write.
-9. JobSpark's docs/knowledge assets are not systematized. Qdrant setup, async task postmortems, OSS connection-pool notes, Agentic ThreadLocal bug analysis, JD alignment skill notes, and question probing skill notes still need dedicated `docs/career-fusion/*` topic files instead of only this audit index.
+9. JobSpark's docs/knowledge assets are systematized under `docs/career-fusion/*`: Qdrant/RAG, async storage and threading, Agentic ThreadLocal/observability, runtime skill assets, rendering/PDF notes, and the migration index are now available as dedicated topic files.
 10. OCR for scanned PDFs is not migrated. PDFBox 3.x text extraction handles text-based PDF resumes; image-only scans still require an OCR service or fallback path.
 
 ## Next Fusion Order
@@ -110,7 +115,6 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 4. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
 5. Harden persistence with an outbox/retry model for RAG chunk, trace, memory, and async task state writes.
 6. Upgrade rendering backends only if needed: openhtmltopdf/docx4j, configurable fonts, and stricter template validation.
-7. Split JobSpark markdown/source notes into dedicated docs under `docs/career-fusion`.
 
 ## Remaining Limitations
 
@@ -118,7 +122,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- Cloud-vendor OSS backend, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, JobSpark topic docs, and scanned-PDF OCR remain open follow-up migrations.
+- Cloud-vendor OSS backend, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 
