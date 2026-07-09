@@ -72,6 +72,7 @@ public class ResumeApplicationService {
     private final ResumeRenderService resumeRenderService;
     private final TaskExecutor careerTaskExecutor;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
+    private final ResumeObjectStorage resumeObjectStorage;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
     public ResumeApplicationService(
@@ -87,7 +88,8 @@ public class ResumeApplicationService {
             ResumePdfTextExtractor resumePdfTextExtractor,
             ResumeRenderService resumeRenderService,
             @Qualifier("careerTaskExecutor") TaskExecutor careerTaskExecutor,
-            ObjectProvider<AiTracePublisher> tracePublisherProvider) {
+            ObjectProvider<AiTracePublisher> tracePublisherProvider,
+            ResumeObjectStorage resumeObjectStorage) {
         this.resumeStore = resumeStore;
         this.jobMatchTaskStore = jobMatchTaskStore;
         this.resumeParseTaskStore = resumeParseTaskStore;
@@ -101,6 +103,7 @@ public class ResumeApplicationService {
         this.resumeRenderService = resumeRenderService;
         this.careerTaskExecutor = careerTaskExecutor;
         this.tracePublisherProvider = tracePublisherProvider;
+        this.resumeObjectStorage = resumeObjectStorage == null ? ResumeObjectStorage.disabled() : resumeObjectStorage;
     }
 
     public ResumeUploadResult upload(Long userId, MultipartFile file) {
@@ -224,6 +227,7 @@ public class ResumeApplicationService {
         validateUpload(file);
         String taskId = UUID.randomUUID().toString();
         byte[] snapshot = readFileSnapshot(file);
+        ResumeObjectStorageResult storage = storeAsyncUpload(taskId, file, snapshot);
         Instant now = Instant.now();
         ResumeParseTaskRecord task = new ResumeParseTaskRecord(
                 taskId,
@@ -234,10 +238,10 @@ public class ResumeApplicationService {
                 file.getSize(),
                 file.getContentType(),
                 StringUtils.hasText(cvType) ? cvType : "upload",
-                "local-snapshot",
-                taskId,
-                null,
-                snapshot,
+                storage == null ? "local-snapshot" : storage.provider(),
+                storage == null ? taskId : storage.key(),
+                storage == null ? null : storage.path(),
+                storage == null ? snapshot : new byte[0],
                 null,
                 null,
                 now,
@@ -415,7 +419,11 @@ public class ResumeApplicationService {
     }
 
     private MultipartFile multipartFromTask(ResumeParseTaskRecord task) {
-        return new SnapshotMultipartFile(task.originalFilename(), task.contentType(), task.fileSnapshot());
+        byte[] bytes = task.fileSnapshot();
+        if (bytes.length == 0 && resumeObjectStorage.enabled() && StringUtils.hasText(task.storageKey())) {
+            bytes = readObjectStorageSnapshot(task.storageKey());
+        }
+        return new SnapshotMultipartFile(task.originalFilename(), task.contentType(), bytes);
     }
 
     private byte[] readFileSnapshot(MultipartFile file) {
@@ -424,6 +432,35 @@ public class ResumeApplicationService {
         } catch (Exception ex) {
             throw new IllegalArgumentException("Resume file snapshot failed: " + ex.getMessage(), ex);
         }
+    }
+
+    private ResumeObjectStorageResult storeAsyncUpload(String taskId, MultipartFile file, byte[] snapshot) {
+        if (!resumeObjectStorage.enabled()) {
+            return null;
+        }
+        try {
+            return resumeObjectStorage.put(objectStorageKey(taskId, safeFilename(file)), snapshot, file.getContentType(), safeFilename(file));
+        } catch (Exception ex) {
+            log.warn("Resume object storage handoff failed, using local snapshot fallback. taskId={}", taskId, ex);
+            return null;
+        }
+    }
+
+    private byte[] readObjectStorageSnapshot(String key) {
+        try (InputStream input = resumeObjectStorage.get(key)) {
+            return input.readAllBytes();
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("Resume object storage read failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    private String objectStorageKey(String taskId, String originalFilename) {
+        return "career/resume/parse-task/" + taskId + "/" + sanitizeObjectName(originalFilename);
+    }
+
+    private String sanitizeObjectName(String originalFilename) {
+        String value = StringUtils.hasText(originalFilename) ? originalFilename : "uploaded-resume";
+        return value.replace('\\', '_').replace('/', '_').replaceAll("[\\r\\n\\t]", "_");
     }
 
     private void validateUpload(MultipartFile file) {

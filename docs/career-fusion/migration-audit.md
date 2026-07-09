@@ -17,7 +17,9 @@
 - Structured resume aggregate `CvBO` and nested resume BOs are available.
 - Resume upload stores structured data through `ResumeStore` and triggers best-effort embedding immediately after save.
 - Async resume upload is available through `POST /api/xunzhi/v1/resumes/upload-async`, returning a parse `taskId` immediately while a background career executor runs parsing, saving, and best-effort embedding.
-- Resume parse tasks persist `PROCESSING/ANALYZING/SAVING/COMPLETED/FAILED/CANCELED` state, progress, owner scope, file metadata, retry lineage, and local snapshot/object-storage handoff metadata in `career_resume_parse_task`.
+- Resume parse tasks persist `PROCESSING/ANALYZING/SAVING/COMPLETED/FAILED/CANCELED` state, progress, owner scope, file metadata, retry lineage, and object-storage handoff metadata in `career_resume_parse_task`.
+- Async parse file handoff now goes through `ResumeObjectStorage`: when `xunzhi-agent.career.storage.object-storage.enabled=true`, uploads are written to the configured object-storage adapter and workers read by `storage_key`; if the adapter is disabled or write fails, the bounded local snapshot fallback keeps single-node retry behavior available.
+- The first built-in object-storage backend is `LocalResumeObjectStorage`, which preserves OSS-style provider/key/path semantics without forcing a cloud SDK into the default build; a cloud OSS SDK backend can be added behind the same interface.
 - Parse task status/cancel/retry APIs are owner-scoped: `GET /resumes/parse-tasks/{taskId}`, `POST /cancel`, and `POST /retry`.
 - Text-based PDF resume parsing is wired through PDFBox 3.x with `RandomAccessReadBuffer` + `Loader.loadPDF(buffer)`, bounded by page and extracted-text limits.
 - JobSpark-style multi-format resume delivery is wired from `CvBO -> FreeMarker Markdown template -> CommonMark HTML -> PDF/DOCX` and exposed through `GET /api/xunzhi/v1/resumes/{resumeId}/render/{format}` with owner-scoped lookup.
@@ -90,7 +92,7 @@
 The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, `skills/question-probing`, and the supplemental pasted JobSpark notes. Items marked "not fully fused" should not be claimed as complete resume highlights yet.
 
 1. Multi-format resume rendering is template-pipeline fused and has a real product loop. AI-Meeting now has `CvRendererFacade`, FreeMarker Markdown templates, CommonMark HTML, shared CSS, and owner-scoped Markdown/HTML/PDF/DOCX export. It is still not at full JobSpark high-fidelity backend parity because it intentionally keeps PDFBox/POI delivery backends instead of migrating openhtmltopdf CSS/PDF rendering, docx4j XHTML import, advanced template validation, and configurable font/template profiles.
-2. JobSpark's async resume parsing task model is first-stage fused. AI-Meeting now exposes persistent parse task status, cancel, retry, progress, owner isolation, and local snapshot/object-storage handoff metadata, but it does not yet integrate a real OSS client/upload pipeline or cross-node queue worker recovery.
+2. JobSpark's async resume parsing task model is fused with an object-storage adapter boundary. AI-Meeting now exposes persistent parse task status, cancel, retry, progress, owner isolation, object-storage key/path handoff, and local snapshot fallback. It still does not include a cloud-vendor OSS SDK backend or cross-node queue worker recovery.
 3. JobSpark's AOP/LangChain4j structured-output defense is fused through framework-neutral JSON cleaning plus LangChain4j `@OutputGuardrails` on external Agentic interfaces. AI-Meeting intentionally does not patch third-party LangChain4j source; it keeps the defense at adapter/interface boundaries.
 4. LangChain4j Agentic ThreadLocal NPE framework patch is not migrated into third-party source. AI-Meeting instead implements an adapter-level safe-call/listener-disable policy: native Agentic listeners default to `false`, attempts to enable them fail fast, and unified observability stays on `AiTracePublisher`.
 5. JobSpark Skill runtime is not fully fused. The `jd-alignment` and `question-probing` Markdown skills are reflected in prompts/tests, but there is no runtime `activate_skill`/tool-provider bridge that loads these skill files as callable tools for Agentic agents.
@@ -102,7 +104,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 
 ## Next Fusion Order
 
-1. Add real OSS upload/download integration for async parse task handoff if multi-node file processing is required.
+1. Add a cloud-vendor OSS backend behind `ResumeObjectStorage` if multi-node file processing requires shared storage beyond the built-in local backend.
 2. Convert `jd-alignment` and `question-probing` Markdown skills into a runtime skill/tool bridge, then connect them to LangChain4j Agentic agents.
 3. Add a real `JavaTechInterviewerAgent` as a planning/question-generation contributor only, while keeping AI-Meeting's existing execution pipeline authoritative.
 4. Extend `AiTracePublisher` coverage to all legacy Spring AI/Xunfei model calls.
@@ -116,7 +118,7 @@ The following list is derived from JobSpark `README.md`, `skills/jd-alignment`, 
 - Observability is unified for the new career Agent events and tool executions, but full automatic tracing of every legacy Spring AI/Xunfei call still depends on wiring those call sites into `AiTracePublisher`.
 - Resume/vector persistence is resilient for demos and restart warmup, but it is not yet a strict fail-closed outbox architecture: MySQL chunk persistence failures are logged and the in-memory lane continues.
 - `optimize/stream` is asynchronous at the request/thread level and emits iteration/result/error events from a background task, but it is not yet token-by-token model streaming.
-- Real OSS-backed async file handoff, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, JobSpark topic docs, and scanned-PDF OCR remain open follow-up migrations.
+- Cloud-vendor OSS backend, runtime Markdown Skill activation, high-fidelity openhtmltopdf/docx4j backends, JobSpark topic docs, and scanned-PDF OCR remain open follow-up migrations.
 
 ## Required Bootstrap
 
@@ -126,6 +128,7 @@ Run these before production use:
 2. `admin/src/main/resources/sql/ai_observability.sql`
 3. Configure `xunzhi-agent.agent-binding.*` to existing `agent_properties.ai_name` values or seed matching agent rows.
 4. Configure DashScope/Qdrant env vars if external rerank/vector store is required: `DASHSCOPE_API_KEY`, `XUNZHI_QDRANT_ENABLED`, `XUNZHI_QDRANT_HOST`, `XUNZHI_QDRANT_PORT`, `XUNZHI_QDRANT_COLLECTION`.
+5. Optional async file handoff: set `XUNZHI_CAREER_OBJECT_STORAGE_ENABLED=true` and configure `XUNZHI_CAREER_OBJECT_STORAGE_BASE_DIR` for the built-in local object-storage backend.
 
 ## Verification Notes
 
@@ -142,6 +145,7 @@ mvn.cmd -pl admin "-Dtest=ResumeRenderServiceTest,ResumeApplicationServiceTest,R
 mvn.cmd -pl admin "-Dtest=ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=AgentResponseParserTest,ResumeRenderServiceTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin "-Dtest=AgentResponseParserTest,ResumeRenderServiceTest,ResumePdfTextExtractorTest,ResumeApplicationServiceTest,ResumeCareerControllerTest" "-Denforcer.skip=true" test
+mvn.cmd -pl admin "-Dtest=ResumeApplicationServiceTest,LocalResumeObjectStorageTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -Pcareer-external-ai "-Dtest=CareerJsonOutputGuardrailAnnotationIT,AgentResponseParserTest,AgenticCvOptimizationRuntimeIT,AgenticInterviewPlanningSpringWiringIT" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -Pcareer-external-ai "-Dtest=CareerJsonOutputGuardrailAnnotationIT,AgenticCvOptimizationRuntimeIT,AgenticInterviewPlanningSpringWiringIT,LangChain4jAgentAdapterTest,LangChain4jAgenticSafetyPolicyTest" "-Denforcer.skip=true" test
 mvn.cmd -pl admin -Pcareer-external-ai -DskipTests "-Denforcer.skip=true" compile

@@ -293,6 +293,47 @@ class ResumeApplicationServiceTest {
     }
 
     @Test
+    void uploadAsyncUsesObjectStorageHandoffWhenAvailable() {
+        ResumeStore store = mock(ResumeStore.class);
+        ResumeRagService ragService = mock(ResumeRagService.class);
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        ResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        InMemoryResumeObjectStorage objectStorage = new InMemoryResumeObjectStorage();
+        ResumeApplicationService service = service(
+                store,
+                ragService,
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> CvBO.builder().name("oss-cv").summary(text).build(),
+                new ResumeRenderService(),
+                parseTaskStore,
+                taskExecutor,
+                objectStorage
+        );
+        MockMultipartFile file = new MockMultipartFile(
+                "resume",
+                "resume.txt",
+                "text/plain",
+                "Java Redis object storage resume".getBytes(StandardCharsets.UTF_8)
+        );
+
+        ResumeParseTaskResult created = service.uploadAsync(7L, file, "upload");
+
+        assertEquals("memory-object-storage", created.storageProvider());
+        org.junit.jupiter.api.Assertions.assertTrue(created.storageKey().contains(created.taskId()));
+        org.junit.jupiter.api.Assertions.assertTrue(objectStorage.contains(created.storageKey()));
+        when(store.save(any())).thenAnswer(invocation -> ((CvBO) invocation.getArgument(0)).toBuilder().id(32L).userId(7L).build());
+        when(store.findByIdAndUserId(32L, 7L)).thenReturn(Optional.of(CvBO.builder().id(32L).userId(7L).name("oss-cv").summary("Java Redis object storage resume").build()));
+        when(ragService.storeCvBO(any())).thenReturn(List.of());
+
+        taskExecutor.runNext();
+
+        ResumeParseTaskResult completed = service.getParseTask(7L, created.taskId());
+        assertEquals(ResumeParseTaskStatus.COMPLETED.name(), completed.status());
+        assertEquals(32L, completed.resumeId());
+        verify(store).save(any());
+    }
+
+    @Test
     void cancelAsyncParseTaskPreventsQueuedExecution() {
         ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
         ResumeStore store = mock(ResumeStore.class);
@@ -400,6 +441,18 @@ class ResumeApplicationServiceTest {
             ResumeRenderService renderService,
             ResumeParseTaskStore parseTaskStore,
             TaskExecutor taskExecutor) {
+        return service(store, ragService, orchestrator, structuringService, renderService, parseTaskStore, taskExecutor, ResumeObjectStorage.disabled());
+    }
+
+    private ResumeApplicationService service(
+            ResumeStore store,
+            ResumeRagService ragService,
+            CvOptimizationOrchestrator orchestrator,
+            ResumeStructuringService structuringService,
+            ResumeRenderService renderService,
+            ResumeParseTaskStore parseTaskStore,
+            TaskExecutor taskExecutor,
+            ResumeObjectStorage objectStorage) {
         return new ResumeApplicationService(
                 store,
                 mock(JobMatchTaskStore.class),
@@ -413,7 +466,8 @@ class ResumeApplicationServiceTest {
                 new ResumePdfTextExtractor(),
                 renderService,
                 taskExecutor,
-                emptyProvider()
+                emptyProvider(),
+                objectStorage
         );
     }
 

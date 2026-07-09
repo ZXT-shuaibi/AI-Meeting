@@ -1,5 +1,8 @@
 package com.hewei.hzyjy.xunzhi.career.config;
 
+import com.hewei.hzyjy.xunzhi.career.resume.application.LocalResumeObjectStorage;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeObjectStorage;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,7 +13,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @EnableConfigurationProperties({
         XunzhiLangChain4jProperties.class,
         CareerRagProperties.class,
-        CareerObservabilityProperties.class
+        CareerObservabilityProperties.class,
+        CareerStorageProperties.class
 })
 public class CareerConfiguration {
 
@@ -23,5 +27,15 @@ public class CareerConfiguration {
         executor.setQueueCapacity(200);
         executor.initialize();
         return executor;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ResumeObjectStorage resumeObjectStorage(CareerStorageProperties properties) {
+        CareerStorageProperties.ObjectStorage objectStorage = properties.getObjectStorage();
+        if (objectStorage == null || !objectStorage.isEnabled()) {
+            return ResumeObjectStorage.disabled();
+        }
+        return new LocalResumeObjectStorage(objectStorage.getProvider(), objectStorage.getBaseDir(), objectStorage.getPublicBaseUrl());
     }
 }
