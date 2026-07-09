@@ -5,6 +5,7 @@ import com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,16 +22,26 @@ public class AiCvReviewer implements CvReviewer {
 
     private final AiGateway aiGateway;
     private final ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider;
+    private final CareerSkillRegistry skillRegistry;
 
     @Autowired
-    public AiCvReviewer(AiGateway aiGateway, ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider) {
+    public AiCvReviewer(
+            AiGateway aiGateway,
+            ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider,
+            ObjectProvider<CareerSkillRegistry> skillRegistryProvider) {
         this.aiGateway = aiGateway;
         this.agentRuntimeGatewayProvider = agentRuntimeGatewayProvider;
+        this.skillRegistry = skillRegistryProvider.getIfAvailable(CareerSkillRegistry::disabled);
     }
 
     public AiCvReviewer(AiGateway aiGateway) {
+        this(aiGateway, CareerSkillRegistry.disabled());
+    }
+
+    public AiCvReviewer(AiGateway aiGateway, CareerSkillRegistry skillRegistry) {
         this.aiGateway = aiGateway;
         this.agentRuntimeGatewayProvider = null;
+        this.skillRegistry = skillRegistry == null ? CareerSkillRegistry.disabled() : skillRegistry;
     }
 
     @Override
@@ -39,8 +50,8 @@ public class AiCvReviewer implements CvReviewer {
         if (response == null || response.isBlank()) {
             response = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("RESUME_REVIEW")
-                    .systemPrompt("Review the resume against the JD. Return JSON: {\"score\":0.0-1.0,\"feedback\":\"concise diagnosis and rewrite advice\"}.")
-                    .userPrompt("JD:\n" + jobDescription + "\n\nCV:\n" + cv + "\n\nReference templates:\n" + referenceTemplates)
+                    .systemPrompt(buildSystemPrompt())
+                    .userPrompt(CvPromptTemplates.REVIEWER_USER_PROMPT.formatted(jobDescription, cv, referenceTemplates))
                     .build()).content();
         }
         double score = AgentResponseParser.score(response).orElseGet(() -> heuristicScore(cv, jobDescription));
@@ -86,5 +97,13 @@ public class AiCvReviewer implements CvReviewer {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private String buildSystemPrompt() {
+        String prompt = skillRegistry == null ? "" : skillRegistry.promptSection(CvPromptTemplates.REVIEWER_SKILL_NAME);
+        if (prompt.isBlank()) {
+            return CvPromptTemplates.REVIEWER_BASE_PROMPT;
+        }
+        return CvPromptTemplates.REVIEWER_BASE_PROMPT + "\n\n" + prompt;
     }
 }

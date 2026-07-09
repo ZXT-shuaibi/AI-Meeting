@@ -1,7 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
 import com.hewei.hzyjy.xunzhi.career.config.AgenticCvRuntimeConfiguration;
-import com.hewei.hzyjy.xunzhi.career.config.XunzhiLangChain4jProperties;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.memory.DecisionIndex;
 import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
@@ -14,6 +13,7 @@ import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.service.SystemMessage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +21,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,7 +30,6 @@ class AgenticCvOptimizationSpringWiringIT {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(AgenticCvRuntimeConfiguration.class)
-            .withBean(XunzhiLangChain4jProperties.class, XunzhiLangChain4jProperties::new)
             .withBean(ChatModel.class, ScriptedCvChatModel::new)
             .withBean(CvReviewer.class, () -> (cv, jd, templates) -> new CvReview(0.1, "fallback reviewer should not be used"))
             .withBean(ScoredCvTailor.class, () -> (cv, review, templates) -> cv.toBuilder().summary("fallback tailor should not be used").build());
@@ -106,6 +106,36 @@ class AgenticCvOptimizationSpringWiringIT {
                                     && "langchain4j-agentic".equals(completed.provider())
                                     && "RESUME_TAILOR".equals(completed.sceneCode()));
                 });
+    }
+
+    @Test
+    void externalAiAgentPromptsStayAlignedWithMigratedCvSkills() {
+        String reviewerPrompt = systemPrompt(AgenticCvReviewAgent.class, "review");
+        String tailorPrompt = systemPrompt(AgenticScoredCvTailorAgent.class, "tailor");
+
+        assertThat(reviewerPrompt)
+                .contains("技术能力匹配度 (权重: 35%)")
+                .contains("工作经验相关性 (权重: 30%)")
+                .contains("项目经验价值 (权重: 25%)")
+                .contains("教育背景与认证 (权重: 10%)")
+                .contains("strengths/weaknesses/suggestions")
+                .contains("参考模板");
+
+        assertThat(tailorPrompt)
+                .contains("真实性底线")
+                .contains("禁止虚构")
+                .contains("技能/经验/项目/教育")
+                .contains("审核反馈")
+                .contains("CvBO");
+    }
+
+    private String systemPrompt(Class<?> agentType, String methodName) {
+        return Arrays.stream(agentType.getMethods())
+                .filter(method -> method.getName().equals(methodName))
+                .findFirst()
+                .map(method -> method.getAnnotation(SystemMessage.class))
+                .map(annotation -> String.join("\n", annotation.value()))
+                .orElseThrow();
     }
 
     private static class RecordingEventPublisher implements ApplicationEventPublisher {

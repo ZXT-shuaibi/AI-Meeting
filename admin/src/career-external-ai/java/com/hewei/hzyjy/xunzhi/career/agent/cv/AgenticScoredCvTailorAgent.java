@@ -14,21 +14,8 @@ public interface AgenticScoredCvTailorAgent {
 
     @Agent(description = "resume tailoring agent that rewrites existing facts based on review feedback.", outputKey = "cv")
     @OutputGuardrails(value = CareerJsonOutputGuardrail.class, maxRetries = 0)
-    @SystemMessage("""
-            You are a resume tailoring agent.
-            Rewrite wording only from existing facts. Do not invent work experience, metrics, companies, or skills.
-            Return only a JSON object compatible with CvBO.
-            """)
-    @UserMessage("""
-            CV:
-            {{cv}}
-
-            Review:
-            {{cvReview}}
-
-            Reference templates:
-            {{referenceTemplates}}
-            """)
+    @SystemMessage(CvPromptTemplates.TAILOR_AGENT_SYSTEM_PROMPT)
+    @UserMessage(CvPromptTemplates.TAILOR_AGENT_USER_PROMPT)
     CvBO tailor(@V("cv") CvBO cv,
                 @V("cvReview") CvReview cvReview,
                 @V("referenceTemplates") List<String> referenceTemplates);

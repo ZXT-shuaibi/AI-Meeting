@@ -20,6 +20,8 @@ public class ClasspathCareerSkillRegistry implements CareerSkillRegistry {
 
     public static ClasspathCareerSkillRegistry withBuiltIns() {
         Map<String, CareerSkill> loaded = new LinkedHashMap<>();
+        loadSkill(loaded, "cv-reviewer", List.of());
+        loadSkill(loaded, "cv-tailor", List.of());
         loadSkill(loaded, "jd-alignment", List.of("jd-template.md"));
         loadSkill(loaded, "question-probing", List.of("probing-strategies.md"));
         return new ClasspathCareerSkillRegistry(loaded);

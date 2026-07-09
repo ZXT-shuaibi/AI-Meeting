@@ -6,6 +6,7 @@ import com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,16 +23,26 @@ public class AiScoredCvTailor implements ScoredCvTailor {
 
     private final AiGateway aiGateway;
     private final ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider;
+    private final CareerSkillRegistry skillRegistry;
 
     @Autowired
-    public AiScoredCvTailor(AiGateway aiGateway, ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider) {
+    public AiScoredCvTailor(
+            AiGateway aiGateway,
+            ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider,
+            ObjectProvider<CareerSkillRegistry> skillRegistryProvider) {
         this.aiGateway = aiGateway;
         this.agentRuntimeGatewayProvider = agentRuntimeGatewayProvider;
+        this.skillRegistry = skillRegistryProvider.getIfAvailable(CareerSkillRegistry::disabled);
     }
 
     public AiScoredCvTailor(AiGateway aiGateway) {
+        this(aiGateway, CareerSkillRegistry.disabled());
+    }
+
+    public AiScoredCvTailor(AiGateway aiGateway, CareerSkillRegistry skillRegistry) {
         this.aiGateway = aiGateway;
         this.agentRuntimeGatewayProvider = null;
+        this.skillRegistry = skillRegistry == null ? CareerSkillRegistry.disabled() : skillRegistry;
     }
 
     @Override
@@ -40,8 +51,8 @@ public class AiScoredCvTailor implements ScoredCvTailor {
         if (response == null || response.isBlank()) {
             response = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("RESUME_TAILOR")
-                    .systemPrompt("Rewrite resume wording based only on existing facts. Return JSON: {\"title\":\"...\",\"summary\":\"...\",\"advice\":\"...\"}. Do not invent experience.")
-                    .userPrompt("CV:\n" + cv + "\n\nReview:\n" + review + "\n\nReference templates:\n" + referenceTemplates)
+                    .systemPrompt(buildSystemPrompt())
+                    .userPrompt(CvPromptTemplates.TAILOR_USER_PROMPT.formatted(cv, review, referenceTemplates))
                     .build()).content();
         }
         JSONObject json = AgentResponseParser.jsonObject(response).orElse(null);
@@ -95,5 +106,13 @@ public class AiScoredCvTailor implements ScoredCvTailor {
             }
         }
         return null;
+    }
+
+    private String buildSystemPrompt() {
+        String prompt = skillRegistry == null ? "" : skillRegistry.promptSection(CvPromptTemplates.TAILOR_SKILL_NAME);
+        if (prompt.isBlank()) {
+            return CvPromptTemplates.TAILOR_BASE_PROMPT;
+        }
+        return CvPromptTemplates.TAILOR_BASE_PROMPT + "\n\n" + prompt;
     }
 }
