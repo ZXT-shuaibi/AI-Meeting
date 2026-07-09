@@ -25,7 +25,7 @@ import java.util.function.Function;
 @EnableConfigurationProperties(XunzhiLangChain4jProperties.class)
 @Import(LangChain4jAgenticSafetyPolicy.class)
 @ConditionalOnBean(ChatModel.class)
-@ConditionalOnProperty(prefix = "xunzhi-agent.langchain4j", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "xunzhi-agent.career.interview.agentic", name = "enabled", havingValue = "true")
 public class AgenticInterviewRuntimeConfiguration {
 
     @Bean("AgenticJDAlignmentAgent")

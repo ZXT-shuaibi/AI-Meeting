@@ -2,15 +2,18 @@ package com.hewei.hzyjy.xunzhi.career.agent.interview;
 
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
-import com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway;
+import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.memory.DecisionIndex;
 import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.InterviewRuleBasedScorer;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.skill.CareerSkill;
+import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -18,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class InterviewPlanningServiceTest {
 
     @Test
-    void reflectionUsesLlmDecisionAndWritesDecisionMemory() {
+    void reflectionUsesSpringAiDecisionWhenResponseIsValid() {
         AiGateway aiGateway = request -> AiGatewayResult.builder()
                 .content("{\"score\":8,\"decision\":\"STAGE_FINISH\",\"feedback\":\"Enough depth.\"}")
                 .provider("test")
@@ -34,99 +37,80 @@ class InterviewPlanningServiceTest {
     }
 
     @Test
-    void reflectionFallsBackWhenAgenticResultMissesDecision() {
+    void reflectionFallsBackToLocalHeuristicDecisionWhenSpringAiResponseIsIncomplete() {
         AiGateway aiGateway = request -> AiGatewayResult.builder()
-                .content("{\"score\":8,\"decision\":\"STAGE_FINISH\",\"feedback\":\"Fallback is valid.\"}")
+                .content("The answer is too shallow and needs concrete metrics and tradeoff details.")
                 .provider("test")
                 .build();
         HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
-        AgentRuntimeGateway invalidReflector = new AgentRuntimeGateway() {
-            @Override
-            @SuppressWarnings("unchecked")
-            public <T> T invoke(String agentName, String methodName, Map<String, Object> variables, Class<T> responseType) {
-                if ("InterviewReflectorAgent".equals(agentName)) {
-                    return (T) new ReflectionResult(5, null, "invalid missing decision", java.util.List.of());
-                }
-                throw new IllegalStateException("Unexpected agent: " + agentName);
-            }
-        };
-        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, provider(invalidReflector));
+        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory);
 
-        ReflectionResult result = service.reflect("interview:s2", "How did you use Redis?", "I used cache aside.", CvBO.builder().id(2L).summary("Java Redis").build());
+        ReflectionResult result = service.reflect(
+                "interview:s2",
+                "How did you use Redis?",
+                "I used cache aside.",
+                CvBO.builder().id(2L).summary("Java Redis").build());
 
-        assertEquals(8, result.score());
-        assertEquals(ReflectionDecision.STAGE_FINISH, result.decision());
-        assertTrue(result.feedback().contains("Fallback is valid"));
+        assertEquals(3, result.score());
+        assertEquals(ReflectionDecision.PROBE, result.decision());
+        assertTrue(result.feedback().contains("too shallow"));
     }
 
     @Test
-    void planningUsesJavaTechInterviewerAgentForFirstQuestionOnly() {
-        AiGateway aiGateway = request -> AiGatewayResult.builder()
-                .content("{\"score\":8,\"decision\":\"NEXT\",\"feedback\":\"ok\"}")
-                .provider("test")
-                .build();
+    void planningBuildsPlanWithoutAgentRuntimeGatewayAndKeepsSkillPromptAssembly() {
+        List<AiPromptRequest> requests = new ArrayList<>();
+        AiGateway aiGateway = request -> {
+            requests.add(request);
+            return AiGatewayResult.builder()
+                    .content("Spring AI alignment summary")
+                    .provider("test")
+                    .build();
+        };
         HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
-        AgentRuntimeGateway gateway = new AgentRuntimeGateway() {
+        CareerSkillRegistry skillRegistry = new CareerSkillRegistry() {
             @Override
-            @SuppressWarnings("unchecked")
-            public <T> T invoke(String agentName, String methodName, Map<String, Object> variables, Class<T> responseType) {
-                if ("JavaTechInterviewerAgent".equals(agentName)) {
-                    return (T) TechnicalQuestionSuggestion.builder()
-                            .question("Agentic Java question about Redis hot key mitigation")
-                            .rationale("Use JD alignment and stage seeds")
-                            .build();
-                }
-                throw new IllegalStateException("No agent: " + agentName);
+            public Optional<CareerSkill> find(String name) {
+                return Optional.empty();
+            }
+
+            @Override
+            public String promptSection(String name) {
+                return "jd-alignment".equals(name) ? "\nSkill prompt: probe for concrete backend tradeoffs." : "";
             }
         };
-        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, provider(gateway));
+        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, skillRegistry);
 
-        InterviewPlan plan = service.plan("interview:s3", "s3", CvBO.builder().id(3L).summary("Java Redis").build(), "Java Redis backend");
+        InterviewPlan plan = service.plan(
+                "interview:s3",
+                "s3",
+                CvBO.builder().id(3L).summary("Java Redis").build(),
+                "Java Redis backend");
 
-        assertEquals("Agentic Java question about Redis hot key mitigation", plan.firstQuestion());
+        assertEquals(1, requests.size());
+        assertEquals("JD_ALIGNMENT", requests.getFirst().sceneCode());
+        assertTrue(requests.getFirst().systemPrompt().contains("Skill prompt: probe for concrete backend tradeoffs."));
+        assertEquals("Spring AI alignment summary", plan.alignment().summary());
+        assertEquals(List.of("JD_ALIGNMENT", "JAVA_TECH_DEPTH", "PROJECT_REFLECTION"),
+                plan.stages().stream().map(InterviewStagePlan::stageName).toList());
+        assertTrue(plan.firstQuestion().contains("Please explain one project where you used java"));
+        assertTrue(memory.view("interview:s3", 8).decisionContext().contains("Plan-Execute-Reflect plan decision"));
     }
 
     @Test
-    void planningFallsBackWhenJavaTechInterviewerAgentFails() {
+    void planningFallsBackToDeterministicQuestionWhenNoMatchedSkillExists() {
         AiGateway aiGateway = request -> AiGatewayResult.builder()
-                .content("{\"score\":8,\"decision\":\"NEXT\",\"feedback\":\"ok\"}")
+                .content("No direct alignment summary")
                 .provider("test")
                 .build();
         HybridCompactingChatMemory memory = new HybridCompactingChatMemory(aiGateway, new InterviewRuleBasedScorer(), new DecisionIndex());
-        AgentRuntimeGateway gateway = new AgentRuntimeGateway() {
-            @Override
-            public <T> T invoke(String agentName, String methodName, Map<String, Object> variables, Class<T> responseType) {
-                throw new IllegalStateException("agent unavailable");
-            }
-        };
-        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory, provider(gateway));
+        InterviewPlanningService service = new InterviewPlanningService(aiGateway, memory);
 
-        InterviewPlan plan = service.plan("interview:s4", "s4", CvBO.builder().id(4L).summary("Java Redis").build(), "Java Redis backend");
+        InterviewPlan plan = service.plan(
+                "interview:s4",
+                "s4",
+                CvBO.builder().id(4L).summary("Project ownership").build(),
+                "Go");
 
-        assertTrue(plan.firstQuestion().contains("Please explain one project"));
-    }
-
-    private static <T> ObjectProvider<T> provider(T value) {
-        return new ObjectProvider<>() {
-            @Override
-            public T getObject(Object... args) {
-                return value;
-            }
-
-            @Override
-            public T getIfAvailable() {
-                return value;
-            }
-
-            @Override
-            public T getIfUnique() {
-                return value;
-            }
-
-            @Override
-            public T getObject() {
-                return value;
-            }
-        };
+        assertTrue(plan.firstQuestion().contains("your most relevant backend project"));
     }
 }
