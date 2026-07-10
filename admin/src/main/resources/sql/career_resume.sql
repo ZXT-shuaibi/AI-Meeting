@@ -100,6 +100,85 @@ CREATE TABLE IF NOT EXISTS `career_resume_skill` (
   KEY `idx_resume_index` (`resume_id`, `item_index`),
   KEY `idx_skill_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume skill detail';
+
+CREATE TABLE IF NOT EXISTS `career_resume_social_link` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `item_index` int DEFAULT 0 COMMENT 'Order index',
+  `name` varchar(64) DEFAULT NULL COMMENT 'Link label',
+  `url` varchar(512) DEFAULT NULL COMMENT 'Link URL',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_index` (`resume_id`, `item_index`),
+  KEY `idx_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume social links';
+
+CREATE TABLE IF NOT EXISTS `career_resume_certificate` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `item_index` int DEFAULT 0 COMMENT 'Order index',
+  `name` varchar(128) DEFAULT NULL COMMENT 'Certificate name',
+  `issuer` varchar(128) DEFAULT NULL COMMENT 'Issuer',
+  `issue_date` date DEFAULT NULL COMMENT 'Issue date',
+  `description` text COMMENT 'Description',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_index` (`resume_id`, `item_index`),
+  KEY `idx_certificate_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume certificate detail';
+
+CREATE TABLE IF NOT EXISTS `career_resume_format_meta` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `alignment` varchar(32) DEFAULT NULL COMMENT 'Text alignment',
+  `line_spacing` decimal(4,2) DEFAULT NULL COMMENT 'Line spacing',
+  `font_family` varchar(128) DEFAULT NULL COMMENT 'Font family',
+  `date_pattern` varchar(64) DEFAULT NULL COMMENT 'Date pattern',
+  `hyperlink_style` varchar(64) DEFAULT NULL COMMENT 'Hyperlink style',
+  `show_avatar` tinyint(1) DEFAULT NULL COMMENT 'Show avatar',
+  `show_social` tinyint(1) DEFAULT NULL COMMENT 'Show social links',
+  `two_column_layout` tinyint(1) DEFAULT NULL COMMENT 'Two-column layout',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_resume_format_meta` (`resume_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume format metadata';
+
+CREATE TABLE IF NOT EXISTS `career_resume_locale_config` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `locale` varchar(32) DEFAULT NULL COMMENT 'Locale',
+  `date_pattern` varchar(64) DEFAULT NULL COMMENT 'Locale date pattern',
+  `section_labels` text COMMENT 'Localized section labels',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_resume_locale_config` (`resume_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume locale config';
+
+CREATE TABLE IF NOT EXISTS `career_resume_highlight` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  `resume_id` bigint NOT NULL COMMENT 'Resume id',
+  `owner_type` varchar(32) NOT NULL COMMENT 'experience/project/skill',
+  `owner_index` int DEFAULT 0 COMMENT 'Parent item order index',
+  `item_index` int DEFAULT 0 COMMENT 'Highlight order index',
+  `type` varchar(64) DEFAULT NULL COMMENT 'Highlight type',
+  `related_id` varchar(128) DEFAULT NULL COMMENT 'Related source id',
+  `highlight` text COMMENT 'Highlight text',
+  `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `update_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `del_flag` tinyint DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_resume_owner` (`resume_id`, `owner_type`, `owner_index`, `item_index`),
+  KEY `idx_related_id` (`related_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Career resume highlights';
+
 CREATE TABLE IF NOT EXISTS `career_resume_chunk` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'ID',
   `resume_id` bigint NOT NULL COMMENT 'Resume id',
