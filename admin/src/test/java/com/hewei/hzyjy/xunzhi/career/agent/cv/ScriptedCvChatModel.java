@@ -14,7 +14,7 @@ class ScriptedCvChatModel implements ChatModel {
     @Override
     public ChatResponse doChat(ChatRequest chatRequest) {
         String prompt = String.valueOf(chatRequest.messages());
-        if (prompt.contains("简历定制专家") || prompt.contains("resume tailoring expert")) {
+        if (prompt.contains("\u7b80\u5386\u5b9a\u5236\u4e13\u5bb6") || prompt.contains("resume tailoring expert")) {
             return response("{\"name\":\"candidate\",\"summary\":\"Java backend Redis project\\nOptimized by Agentic tailor\",\"title\":\"Java Backend Engineer\",\"advice\":\"Tailored to JD\"}");
         }
         int call = reviewCalls.incrementAndGet();

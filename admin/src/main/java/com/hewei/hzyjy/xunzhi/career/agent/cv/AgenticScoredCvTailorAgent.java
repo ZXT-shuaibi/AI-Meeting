@@ -1,7 +1,7 @@
 package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
-import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.agent.support.CareerJsonOutputGuardrail;
+import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import dev.langchain4j.agentic.Agent;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;

@@ -1,7 +1,7 @@
 package com.hewei.hzyjy.xunzhi.career.agent.cv;
 
-import com.hewei.hzyjy.xunzhi.career.config.AgenticCvRuntimeConfiguration;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
+import com.hewei.hzyjy.xunzhi.career.config.AgenticCvRuntimeConfiguration;
 import com.hewei.hzyjy.xunzhi.career.memory.DecisionIndex;
 import com.hewei.hzyjy.xunzhi.career.memory.HybridCompactingChatMemory;
 import com.hewei.hzyjy.xunzhi.career.memory.InterviewRuleBasedScorer;
@@ -30,7 +30,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class AgenticCvOptimizationSpringWiringIT {
+class AgenticCvOptimizationSpringWiringTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(AgenticCvRuntimeConfiguration.class)

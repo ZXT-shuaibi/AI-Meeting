@@ -6,7 +6,6 @@ import com.hewei.hzyjy.xunzhi.career.agent.cv.AgenticCvOptimizationRuntime;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReviewer;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.ScoredCvTailor;
 import com.hewei.hzyjy.xunzhi.career.ai.LangChain4jAgenticSafetyPolicy;
-import com.hewei.hzyjy.xunzhi.career.config.CareerOptimizationProperties;
 import com.hewei.hzyjy.xunzhi.career.memory.LangChain4jHybridMemoryAdapter;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import dev.langchain4j.agentic.AgenticServices;
@@ -14,9 +13,9 @@ import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -36,7 +35,7 @@ public class AgenticCvRuntimeConfiguration {
     @ConditionalOnMissingBean
     public ChatModel careerLangChain4jChatModel(XunzhiLangChain4jProperties properties) {
         if (!StringUtils.hasText(properties.getApiKey())) {
-            throw new IllegalStateException("xunzhi-agent.langchain4j.api-key is required when career-external-ai profile is enabled");
+            throw new IllegalStateException("xunzhi-agent.langchain4j.api-key is required when LangChain4j CV runtime is enabled");
         }
         return OpenAiChatModel.builder()
                 .baseUrl(properties.getBaseUrl())

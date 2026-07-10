@@ -6,7 +6,6 @@ import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO.OptimizationRecord;
 import dev.langchain4j.agentic.scope.AgentInvocation;
 import dev.langchain4j.agentic.scope.AgenticScope;
-import lombok.RequiredArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,7 +14,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
-@RequiredArgsConstructor
 public class AgenticCvOptimizationRuntime {
 
     public static final String SCORE_GATE_STATE_KEY = "careerOptimizationScoreGate";

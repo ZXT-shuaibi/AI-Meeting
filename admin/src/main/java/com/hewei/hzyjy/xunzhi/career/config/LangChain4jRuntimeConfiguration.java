@@ -9,6 +9,7 @@ import com.hewei.hzyjy.xunzhi.career.agent.interview.ReflectionResult;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.TechnicalQuestionSuggestion;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -19,14 +20,24 @@ import java.util.Locale;
 @Configuration
 public class LangChain4jRuntimeConfiguration {
 
+    static boolean resumeFallbackAgentsEnabled() {
+        return false;
+    }
+
+    static boolean interviewFallbackAgentsEnabled() {
+        return true;
+    }
+
     @Bean("CvReviewer")
     @ConditionalOnMissingBean(name = "CvReviewer")
+    @ConditionalOnProperty(prefix = "xunzhi-agent.langchain4j.resume-local-fallback", name = "enabled", havingValue = "true")
     public LocalCvReviewerAgent cvReviewerAgent() {
         return new LocalCvReviewerAgent();
     }
 
     @Bean("ScoredCvTailor")
     @ConditionalOnMissingBean(name = "ScoredCvTailor")
+    @ConditionalOnProperty(prefix = "xunzhi-agent.langchain4j.resume-local-fallback", name = "enabled", havingValue = "true")
     public LocalScoredCvTailorAgent scoredCvTailorAgent() {
         return new LocalScoredCvTailorAgent();
     }
@@ -40,24 +51,36 @@ public class LangChain4jRuntimeConfiguration {
     @Bean("InterviewCoordinatorAgent")
     @ConditionalOnMissingBean(name = "InterviewCoordinatorAgent")
     public LocalInterviewCoordinatorAgent interviewCoordinatorAgent() {
+        if (!interviewFallbackAgentsEnabled()) {
+            throw new IllegalStateException("Local interview fallback agents are disabled.");
+        }
         return new LocalInterviewCoordinatorAgent();
     }
 
     @Bean("InterviewOrchestratorService")
     @ConditionalOnMissingBean(name = "InterviewOrchestratorService")
     public LocalInterviewOrchestratorAgent interviewOrchestratorAgent() {
+        if (!interviewFallbackAgentsEnabled()) {
+            throw new IllegalStateException("Local interview fallback agents are disabled.");
+        }
         return new LocalInterviewOrchestratorAgent();
     }
 
     @Bean("InterviewReflectorAgent")
     @ConditionalOnMissingBean(name = "InterviewReflectorAgent")
     public LocalInterviewReflectorAgent interviewReflectorAgent() {
+        if (!interviewFallbackAgentsEnabled()) {
+            throw new IllegalStateException("Local interview fallback agents are disabled.");
+        }
         return new LocalInterviewReflectorAgent();
     }
 
     @Bean("JavaTechInterviewerAgent")
     @ConditionalOnMissingBean(name = "JavaTechInterviewerAgent")
     public LocalJavaTechInterviewerAgent javaTechInterviewerAgent() {
+        if (!interviewFallbackAgentsEnabled()) {
+            throw new IllegalStateException("Local interview fallback agents are disabled.");
+        }
         return new LocalJavaTechInterviewerAgent();
     }
 
