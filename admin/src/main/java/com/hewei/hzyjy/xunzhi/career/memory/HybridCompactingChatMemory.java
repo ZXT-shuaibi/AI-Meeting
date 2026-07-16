@@ -2,6 +2,7 @@ package com.hewei.hzyjy.xunzhi.career.memory;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
+import com.github.benmanes.caffeine.cache.Cache;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import org.springframework.beans.factory.ObjectProvider;
@@ -14,7 +15,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Component
@@ -30,10 +30,10 @@ public class HybridCompactingChatMemory {
     private final DecisionIndex decisionIndex;
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final MysqlMemoryMessageStore coldStore;
-    private final Map<String, List<MemoryMessage>> store = new ConcurrentHashMap<>();
+    private final Cache<String, List<MemoryMessage>> store;
 
     public HybridCompactingChatMemory(AiGateway aiGateway, ImportanceScorer importanceScorer, DecisionIndex decisionIndex) {
-        this(aiGateway, importanceScorer, decisionIndex, null, null);
+        this(aiGateway, importanceScorer, decisionIndex, null, null, null);
     }
 
     public HybridCompactingChatMemory(
@@ -41,7 +41,7 @@ public class HybridCompactingChatMemory {
             ImportanceScorer importanceScorer,
             DecisionIndex decisionIndex,
             ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
-        this(aiGateway, importanceScorer, decisionIndex, redisTemplateProvider, null);
+        this(aiGateway, importanceScorer, decisionIndex, redisTemplateProvider, null, null);
     }
 
     @Autowired
@@ -51,11 +51,22 @@ public class HybridCompactingChatMemory {
             DecisionIndex decisionIndex,
             ObjectProvider<StringRedisTemplate> redisTemplateProvider,
             MysqlMemoryMessageStore coldStore) {
+        this(aiGateway, importanceScorer, decisionIndex, redisTemplateProvider, coldStore, null);
+    }
+
+    HybridCompactingChatMemory(
+            AiGateway aiGateway,
+            ImportanceScorer importanceScorer,
+            DecisionIndex decisionIndex,
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+            MysqlMemoryMessageStore coldStore,
+            Cache<String, List<MemoryMessage>> store) {
         this.aiGateway = aiGateway;
         this.importanceScorer = importanceScorer;
         this.decisionIndex = decisionIndex;
         this.redisTemplateProvider = redisTemplateProvider;
         this.coldStore = coldStore;
+        this.store = store == null ? MemoryHotCache.create() : store;
     }
 
     public void add(String memoryId, MemoryMessage message) {
@@ -89,7 +100,7 @@ public class HybridCompactingChatMemory {
     }
 
     public void clear(String memoryId) {
-        store.remove(memoryId);
+        store.invalidate(memoryId);
         decisionIndex.clear(memoryId);
         StringRedisTemplate redisTemplate = redisTemplate();
         if (redisTemplate != null) {
@@ -151,7 +162,7 @@ public class HybridCompactingChatMemory {
     }
 
     private List<MemoryMessage> load(String memoryId) {
-        List<MemoryMessage> messages = store.get(memoryId);
+        List<MemoryMessage> messages = store.getIfPresent(memoryId);
         if (messages != null) {
             return messages;
         }

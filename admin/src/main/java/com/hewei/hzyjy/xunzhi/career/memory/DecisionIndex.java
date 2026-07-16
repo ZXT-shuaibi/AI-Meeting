@@ -2,6 +2,7 @@ package com.hewei.hzyjy.xunzhi.career.memory;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
+import com.github.benmanes.caffeine.cache.Cache;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -12,7 +13,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class DecisionIndex {
@@ -20,22 +20,30 @@ public class DecisionIndex {
     private static final String REDIS_KEY_PREFIX = "xunzhi-agent:career:memory:decision:";
     private static final Duration REDIS_TTL = Duration.ofDays(7);
 
-    private final Map<Object, List<DecisionEntry>> index = new ConcurrentHashMap<>();
+    private final Cache<Object, List<DecisionEntry>> index;
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final MysqlDecisionStore coldStore;
 
     public DecisionIndex() {
-        this(null, null);
+        this(null, null, null);
     }
 
     public DecisionIndex(ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
-        this(redisTemplateProvider, null);
+        this(redisTemplateProvider, null, null);
     }
 
     @Autowired
     public DecisionIndex(ObjectProvider<StringRedisTemplate> redisTemplateProvider, MysqlDecisionStore coldStore) {
+        this(redisTemplateProvider, coldStore, null);
+    }
+
+    DecisionIndex(
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+            MysqlDecisionStore coldStore,
+            Cache<Object, List<DecisionEntry>> index) {
         this.redisTemplateProvider = redisTemplateProvider;
         this.coldStore = coldStore;
+        this.index = index == null ? MemoryHotCache.create() : index;
     }
 
     public void record(Object memoryId, int messageIndex, String summary) {
@@ -48,7 +56,7 @@ public class DecisionIndex {
     }
 
     public List<DecisionEntry> getDecisions(Object memoryId) {
-        List<DecisionEntry> decisions = index.get(memoryId);
+        List<DecisionEntry> decisions = index.getIfPresent(memoryId);
         if (decisions != null) {
             return List.copyOf(decisions);
         }
@@ -85,7 +93,7 @@ public class DecisionIndex {
     }
 
     public void clear(Object memoryId) {
-        index.remove(memoryId);
+        index.invalidate(memoryId);
         StringRedisTemplate redisTemplate = redisTemplate();
         if (redisTemplate != null) {
             try {

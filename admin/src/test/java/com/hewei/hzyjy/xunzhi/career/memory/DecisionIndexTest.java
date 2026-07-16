@@ -1,8 +1,11 @@
 package com.hewei.hzyjy.xunzhi.career.memory;
 
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,5 +37,24 @@ class DecisionIndexTest {
 
         assertTrue(index.getDecisions("m1").isEmpty());
         assertEquals("", index.formatDecisionContext("m1", 5));
+    }
+
+    @Test
+    void evictsInactiveDecisionHistoryFromTheHotCache() {
+        AtomicLong tickerNanos = new AtomicLong();
+        DecisionIndex index = new DecisionIndex(
+                null,
+                null,
+                Caffeine.<Object, List<DecisionEntry>>newBuilder()
+                        .maximumSize(1)
+                        .expireAfterAccess(Duration.ofMinutes(30))
+                        .ticker(tickerNanos::get)
+                        .build()
+        );
+        index.record("inactive-session", 0, "keep");
+
+        tickerNanos.addAndGet(Duration.ofMinutes(31).toNanos());
+
+        assertTrue(index.getDecisions("inactive-session").isEmpty());
     }
 }

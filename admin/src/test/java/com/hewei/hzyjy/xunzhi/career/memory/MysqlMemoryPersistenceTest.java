@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.memory;
 
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.hewei.hzyjy.xunzhi.career.memory.dao.entity.CareerMemoryDecisionDO;
 import com.hewei.hzyjy.xunzhi.career.memory.dao.entity.CareerMemoryMessageDO;
 import com.hewei.hzyjy.xunzhi.career.memory.dao.mapper.CareerMemoryDecisionMapper;
@@ -8,8 +9,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,6 +22,34 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MysqlMemoryPersistenceTest {
+
+    @Test
+    void evictsInactiveMessageHistoryFromTheHotCacheAndRestoresItFromColdStorage() {
+        CareerMemoryMessageMapper messageMapper = mock(CareerMemoryMessageMapper.class);
+        MysqlMemoryMessageStore coldStore = new MysqlMemoryMessageStore(provider(messageMapper));
+        AtomicLong tickerNanos = new AtomicLong();
+        HybridCompactingChatMemory memory = new HybridCompactingChatMemory(
+                request -> null,
+                new InterviewRuleBasedScorer(),
+                new DecisionIndex(),
+                null,
+                coldStore,
+                Caffeine.<String, List<MemoryMessage>>newBuilder()
+                        .maximumSize(1)
+                        .expireAfterAccess(Duration.ofMinutes(30))
+                        .ticker(tickerNanos::get)
+                        .build()
+        );
+        memory.add("inactive-session", MemoryMessage.builder().role(MemoryRole.USER).content("Java").build());
+        ArgumentCaptor<CareerMemoryMessageDO> saved = ArgumentCaptor.forClass(CareerMemoryMessageDO.class);
+        verify(messageMapper).insert(saved.capture());
+        when(messageMapper.selectList(any())).thenReturn(List.of(saved.getValue()));
+
+        tickerNanos.addAndGet(Duration.ofMinutes(31).toNanos());
+
+        assertEquals("Java", memory.messages("inactive-session").get(0).content());
+        verify(messageMapper).selectList(any());
+    }
 
     @Test
     void hybridMemoryPersistsAndRestoresMessagesThroughColdStore() {
