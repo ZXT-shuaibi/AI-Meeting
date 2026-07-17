@@ -37,4 +37,20 @@ class LangChain4jRuntimeConfigurationTest {
             assertThat(context).doesNotHaveBean("ScoredCvTailor");
         });
     }
+
+    @Test
+    void usesNinetySecondDefaultTimeoutForLangChain4jRequests() {
+        XunzhiLangChain4jProperties properties = new XunzhiLangChain4jProperties();
+
+        assertThat(properties.getTimeoutSeconds()).isEqualTo(90);
+    }
+
+    @Test
+    void allowsOverridingLangChain4jRequestTimeout() {
+        XunzhiLangChain4jProperties properties = new XunzhiLangChain4jProperties();
+
+        properties.setTimeoutSeconds(120);
+
+        assertThat(properties.getTimeoutSeconds()).isEqualTo(120);
+    }
 }

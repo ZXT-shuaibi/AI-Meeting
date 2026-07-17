@@ -104,7 +104,7 @@ public class InterviewQuestionCacheServiceImpl implements InterviewQuestionCache
             "local current = redis.call('HGET', KEYS[1], 'version') "
                     + "if current == false then current = '0' end "
                     + "if tostring(current) ~= tostring(ARGV[1]) then return 0 end "
-                    + "redis.call('HSET', KEYS[1], "
+                    + "redis.call('HMSET', KEYS[1], "
                     + "'status', ARGV[2], "
                     + "'currentIndex', ARGV[3], "
                     + "'currentQuestionNumber', ARGV[4], "

@@ -41,7 +41,7 @@ public class AgenticCvRuntimeConfiguration {
                 .baseUrl(properties.getBaseUrl())
                 .apiKey(properties.getApiKey())
                 .modelName(properties.getChatModel())
-                .timeout(Duration.ofSeconds(30))
+                .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
                 .maxRetries(1)
                 .build();
     }

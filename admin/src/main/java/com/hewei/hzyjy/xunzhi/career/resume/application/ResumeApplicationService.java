@@ -410,6 +410,7 @@ public class ResumeApplicationService {
             }
             ResumeParseTaskRecord failed = (latest == null ? task : latest).failed(ex.getMessage());
             resumeParseTaskStore.save(failed);
+            log.warn("Resume parse task failed, taskId={}, userId={}", taskId, task.userId(), ex);
         }
     }
 

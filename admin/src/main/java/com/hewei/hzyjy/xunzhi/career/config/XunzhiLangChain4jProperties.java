@@ -18,6 +18,13 @@ public class XunzhiLangChain4jProperties {
     private String embeddingModel = "text-embedding-v3";
 
     /**
+     * Maximum time to wait for a complete response from the OpenAI-compatible
+     * provider. Agentic resume optimization sends larger structured prompts and
+     * may legitimately need longer than a normal chat turn.
+     */
+    private int timeoutSeconds = 90;
+
+    /**
      * Keep false unless LangChain4j direct Agentic invocation is upgraded or wrapped
      * to initialize its managed ThreadLocal before native listener/tool callbacks.
      */

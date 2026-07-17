@@ -6,6 +6,7 @@ import org.apache.pdfbox.io.RandomAccessReadBuffer;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.InputStream;
 import java.io.Writer;
@@ -17,8 +18,20 @@ public class ResumePdfTextExtractor {
     static final int MAX_RESUME_TEXT_LENGTH = 120000;
     static final int MAX_PDF_PAGES = 40;
 
+    private final ResumeOcrFallback resumeOcrFallback;
+
+    public ResumePdfTextExtractor() {
+        this(ResumeOcrFallback.disabled());
+    }
+
+    @Autowired
+    public ResumePdfTextExtractor(ResumeOcrFallback resumeOcrFallback) {
+        this.resumeOcrFallback = resumeOcrFallback == null ? ResumeOcrFallback.disabled() : resumeOcrFallback;
+    }
+
     public String extract(InputStream input) throws Exception {
-        try (RandomAccessReadBuffer buffer = new RandomAccessReadBuffer(input);
+        byte[] pdfBytes = input.readAllBytes();
+        try (RandomAccessReadBuffer buffer = new RandomAccessReadBuffer(pdfBytes);
              PDDocument document = Loader.loadPDF(buffer)) {
             if (document.isEncrypted()) {
                 throw new IllegalArgumentException("Encrypted PDF resumes are not supported");
@@ -34,7 +47,8 @@ public class ResumePdfTextExtractor {
             } catch (ResumeTextLimitReachedException ignored) {
                 log.debug("PDF resume text extraction stopped after reaching {} characters", MAX_RESUME_TEXT_LENGTH);
             }
-            return writer.normalizedText();
+            String text = writer.normalizedText();
+            return text.isBlank() ? resumeOcrFallback.extract(pdfBytes, document.getNumberOfPages()) : text;
         }
     }
 

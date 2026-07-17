@@ -21,8 +21,41 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class QdrantResumeVectorStoreTest {
+
+    @Test
+    void rejectsVectorsThatDoNotMatchConfiguredDimension() {
+        XunzhiLangChain4jProperties properties = new XunzhiLangChain4jProperties();
+        properties.setEnabled(true);
+        properties.getQdrant().setEnabled(true);
+        properties.getQdrant().setCollectionName("career_resume_test");
+        properties.getQdrant().setHost("localhost");
+        properties.getQdrant().setVectorSize(3);
+        QdrantResumeVectorStore store = new QdrantResumeVectorStore(properties);
+
+        ResumeVectorDocument document = ResumeVectorDocument.builder()
+                .id("vector-1")
+                .text("resume")
+                .vector(new float[]{0.1F, 0.2F})
+                .metadata(Map.of(META_RESUME_ID, "resume-1"))
+                .build();
+
+        assertThrows(IllegalArgumentException.class, () -> store.addAll(List.of(document)));
+    }
+
+    @Test
+    void remainsAvailableWhenLangChain4jChatRuntimeIsDisabled() {
+        XunzhiLangChain4jProperties properties = new XunzhiLangChain4jProperties();
+        properties.setEnabled(false);
+        properties.getQdrant().setEnabled(true);
+        properties.getQdrant().setCollectionName("career_resume_test");
+        properties.getQdrant().setHost("localhost");
+
+        assertTrue(new QdrantResumeVectorStore(properties).available());
+    }
 
     @Test
     void replacesExistingResumeVectorsBeforeUpsert() {
@@ -31,6 +64,7 @@ class QdrantResumeVectorStoreTest {
         properties.getQdrant().setEnabled(true);
         properties.getQdrant().setCollectionName("career_resume_test");
         properties.getQdrant().setHost("localhost");
+        properties.getQdrant().setVectorSize(2);
         QdrantResumeVectorStore store = new QdrantResumeVectorStore(properties);
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(Map.class)))

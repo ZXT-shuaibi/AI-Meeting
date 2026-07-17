@@ -36,6 +36,7 @@ class CvPromptTemplatesTest {
         assertTrue(systemPrompt.contains("Java engineer JD"));
         assertTrue(userPrompt.contains("Java backend"));
         assertTrue(userPrompt.contains("template A"));
+        assertTrue(!userPrompt.contains("CvBO("));
     }
 
     @Test

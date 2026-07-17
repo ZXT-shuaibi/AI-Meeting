@@ -41,6 +41,7 @@ public class QdrantResumeVectorStore {
         if (!available() || incomingDocuments == null || incomingDocuments.isEmpty()) {
             return;
         }
+        validateVectors(incomingDocuments);
         if (!ensureCollection()) {
             return;
         }
@@ -71,6 +72,7 @@ public class QdrantResumeVectorStore {
         if (!available() || queryVector == null || queryVector.length == 0 || limit <= 0) {
             return List.of();
         }
+        validateVectorDimension(queryVector);
         if (!ensureCollection()) {
             return List.of();
         }
@@ -122,12 +124,25 @@ public class QdrantResumeVectorStore {
 
     public boolean available() {
         XunzhiLangChain4jProperties.Qdrant qdrant = properties.getQdrant();
-        return properties.isEnabled()
-                && qdrant != null
+        return qdrant != null
                 && qdrant.isEnabled()
                 && System.currentTimeMillis() >= unavailableUntilMillis
                 && StringUtils.hasText(qdrant.getHost())
                 && StringUtils.hasText(qdrant.getCollectionName());
+    }
+
+    private void validateVectors(List<ResumeVectorDocument> documents) {
+        documents.forEach(document -> validateVectorDimension(document.vector()));
+    }
+
+    private void validateVectorDimension(float[] vector) {
+        int expectedDimension = properties.getQdrant().getVectorSize();
+        int actualDimension = vector == null ? 0 : vector.length;
+        if (actualDimension != expectedDimension) {
+            throw new IllegalArgumentException(
+                    "Embedding vector dimension " + actualDimension + " does not match Qdrant collection dimension " + expectedDimension
+            );
+        }
     }
 
     private void deleteByResumeIds(Set<String> resumeIds) {

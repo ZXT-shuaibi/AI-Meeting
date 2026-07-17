@@ -1,14 +1,16 @@
 package com.hewei.hzyjy.xunzhi.career.ai;
 
 import com.hewei.hzyjy.xunzhi.career.config.XunzhiLangChain4jProperties;
+import com.hewei.hzyjy.xunzhi.career.config.OpenAiCompatibleEmbeddingConfiguration;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 
 @Slf4j
@@ -28,7 +30,7 @@ public class LangChain4jEmbeddingAdapter implements EmbeddingGateway {
 
     @Override
     public List<float[]> embedAll(List<String> texts) {
-        Object embeddingModel = resolveLangChain4jEmbeddingModel();
+        EmbeddingModel embeddingModel = resolveLangChain4jEmbeddingModel();
         if (embeddingModel != null) {
             try {
                 return invokeLangChain4jEmbeddingModel(embeddingModel, texts);
@@ -39,32 +41,19 @@ public class LangChain4jEmbeddingAdapter implements EmbeddingGateway {
         return texts.stream().map(this::hashEmbedding).toList();
     }
 
-    private Object resolveLangChain4jEmbeddingModel() {
-        return applicationContext.getBeansOfType(Object.class).values().stream()
-                .filter(bean -> bean.getClass().getName().contains("EmbeddingModel"))
-                .findFirst()
-                .orElse(null);
+    private EmbeddingModel resolveLangChain4jEmbeddingModel() {
+        if (applicationContext.containsBean(OpenAiCompatibleEmbeddingConfiguration.EMBEDDING_MODEL_BEAN_NAME)) {
+            return applicationContext.getBean(
+                    OpenAiCompatibleEmbeddingConfiguration.EMBEDDING_MODEL_BEAN_NAME,
+                    EmbeddingModel.class
+            );
+        }
+        return applicationContext.getBeanProvider(EmbeddingModel.class).getIfUnique();
     }
 
-    private List<float[]> invokeLangChain4jEmbeddingModel(Object embeddingModel, List<String> texts) throws Exception {
-        Method embedAll = embeddingModel.getClass().getMethod("embedAll", List.class);
-        Object response = embedAll.invoke(embeddingModel, texts);
-        Method content = response.getClass().getMethod("content");
-        Object embeddings = content.invoke(response);
-        if (!(embeddings instanceof List<?> list)) {
-            throw new IllegalStateException("LangChain4j embedAll response is not a list");
-        }
-        List<float[]> vectors = new ArrayList<>();
-        for (Object embedding : list) {
-            Method vector = embedding.getClass().getMethod("vector");
-            Object raw = vector.invoke(embedding);
-            if (raw instanceof float[] floats) {
-                vectors.add(floats);
-            } else {
-                throw new IllegalStateException("LangChain4j embedding vector is not float[]");
-            }
-        }
-        return vectors;
+    private List<float[]> invokeLangChain4jEmbeddingModel(EmbeddingModel embeddingModel, List<String> texts) {
+        return embeddingModel.embedAll(texts.stream().map(TextSegment::from).toList())
+                .content().stream().map(Embedding::vector).toList();
     }
 
     private float[] hashEmbedding(String text) {

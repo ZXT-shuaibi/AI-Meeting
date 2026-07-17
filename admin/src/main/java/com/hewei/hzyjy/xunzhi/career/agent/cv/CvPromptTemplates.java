@@ -44,13 +44,13 @@ final class CvPromptTemplates {
 
     static String tailorSystemPrompt(CareerSkillRegistry registry, CvBO cv) {
         return render(tailorSystemPrompt(registry), Map.of(
-                "cv", stringify(cv)
+                "cv", cvText(cv)
         ));
     }
 
     static String reviewerUserPrompt(CvBO cv, String jobDescription, List<String> referenceTemplates) {
         return render(REVIEWER_USER_PROMPT_TEMPLATE, Map.of(
-                "cv", stringify(cv),
+                "cv", cvText(cv),
                 "jobDescription", safe(jobDescription),
                 "referenceTemplates", stringify(referenceTemplates == null ? List.of() : referenceTemplates)
         ));
@@ -58,7 +58,7 @@ final class CvPromptTemplates {
 
     static String tailorUserPrompt(CvBO cv, CvReview review, List<String> referenceTemplates) {
         return render(TAILOR_USER_PROMPT_TEMPLATE, Map.of(
-                "cv", stringify(cv),
+                "cv", cvText(cv),
                 "cvReview", stringify(review),
                 "referenceTemplates", stringify(referenceTemplates == null ? List.of() : referenceTemplates)
         ));
@@ -84,6 +84,19 @@ final class CvPromptTemplates {
 
     private static String stringify(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private static String cvText(CvBO cv) {
+        if (cv == null) {
+            return "";
+        }
+        return "Name: " + safe(cv.getName()) + "\n"
+                + "Target title: " + safe(cv.getTitle()) + "\n"
+                + "Summary:\n" + safe(cv.getSummary()) + "\n"
+                + "Skills: " + stringify(cv.getSkills()) + "\n"
+                + "Experience: " + stringify(cv.getExperiences()) + "\n"
+                + "Projects: " + stringify(cv.getProjects()) + "\n"
+                + "Education: " + stringify(cv.getEducations());
     }
 
     private static String safe(String value) {
