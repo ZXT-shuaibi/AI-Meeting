@@ -166,6 +166,9 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
         row.setFileSnapshot(task.fileSnapshot());
         row.setRetryOfTaskId(task.retryOfTaskId());
         row.setErrorMessage(task.errorMessage());
+        row.setJobDescription(task.jobDescription());
+        row.setOptimizationResultJson(task.optimizationResultJson());
+        row.setOptimizedAt(toDate(task.optimizedAt()));
         row.setStartTime(toDate(task.startTime()));
         row.setCompleteTime(toDate(task.completeTime()));
         row.setUpdateTime(toDate(task.updateTime()));
@@ -188,6 +191,9 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
                 row.getFileSnapshot(),
                 row.getRetryOfTaskId(),
                 row.getErrorMessage(),
+                row.getJobDescription(),
+                row.getOptimizationResultJson(),
+                toInstant(row.getOptimizedAt()),
                 toInstant(row.getStartTime()),
                 toInstant(row.getCompleteTime()),
                 toInstant(row.getCreateTime()),

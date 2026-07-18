@@ -56,8 +56,7 @@ public class AiCvReviewer implements CvReviewer {
                     .build()).content();
         }
         double score = AgentResponseParser.score(response).orElseGet(() -> heuristicScore(cv, jobDescription));
-        String feedback = AgentResponseParser.feedback(response).orElse(response);
-        return new CvReview(score, feedback);
+        return CvReview.fromModelResponse(score, response);
     }
 
     private String tryLangChain4j(CvBO cv, String jobDescription, List<String> referenceTemplates) {

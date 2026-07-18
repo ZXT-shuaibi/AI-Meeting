@@ -30,6 +30,9 @@ public class CareerResumeParseTaskDO extends BaseDO {
     private byte[] fileSnapshot;
     private String retryOfTaskId;
     private String errorMessage;
+    private String jobDescription;
+    private String optimizationResultJson;
+    private Date optimizedAt;
     private Date startTime;
     private Date completeTime;
 }

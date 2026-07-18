@@ -34,6 +34,23 @@ class AiCvReviewerTest {
     }
 
     @Test
+    void exposesStructuredFeedbackSectionsFromTheReviewerResponse() {
+        AiCvReviewer reviewer = new AiCvReviewer(request -> AiGatewayResult.builder()
+                .content("""
+                        {"score":0.81,"feedback":"Overall feedback","summary":"Strong backend profile.","strengths":["Java and Redis depth"],"weaknesses":["Production experience is limited"],"suggestions":["Quantify project impact"]}
+                        """)
+                .provider("test")
+                .build(), CareerSkillRegistry.disabled());
+
+        CvReview review = reviewer.review(CvBO.builder().summary("java redis").build(), "Java backend", List.of());
+
+        assertEquals("Strong backend profile.", review.summary());
+        assertEquals(List.of("Java and Redis depth"), review.strengths());
+        assertEquals(List.of("Production experience is limited"), review.weaknesses());
+        assertEquals(List.of("Quantify project impact"), review.suggestions());
+    }
+
+    @Test
     void injectsReviewerSkillPromptIntoSpringAiFallback() {
         AtomicReference<AiPromptRequest> captured = new AtomicReference<>();
         CareerSkillRegistry registry = new CareerSkillRegistry() {

@@ -1,5 +1,6 @@
 package com.hewei.hzyjy.xunzhi.career.resume.application;
 
+import com.alibaba.fastjson2.JSON;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReview;
@@ -211,7 +212,7 @@ public class ResumeApplicationService {
                         + ", bestReview=" + result.bestReview())
                 .metadata(Map.of("scene", "RESUME_TAILOR", "resumeId", String.valueOf(resumeId), "userId", String.valueOf(userId)))
                 .build());
-        return CvOptimizationResult.builder()
+        CvOptimizationResult response = CvOptimizationResult.builder()
                 .cv(latest)
                 .bestReview(result.bestReview())
                 .iterations(result.iterations())
@@ -219,6 +220,20 @@ public class ResumeApplicationService {
                 .failureReason(result.failureReason())
                 .reviewHistory(result.reviewHistory())
                 .build();
+        resumeParseTaskStore.findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name()).stream()
+                .filter(task -> resumeId.equals(task.resumeId()))
+                .findFirst()
+                .ifPresent(task -> resumeParseTaskStore.save(task.withOptimization(jobDescription, JSON.toJSONString(response))));
+        return response;
+    }
+
+    public List<ResumeOptimizationHistoryResult> listOptimizationHistory(Long userId) {
+        return resumeParseTaskStore.findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name()).stream()
+                .filter(task -> task.optimizationResultJson() != null && !task.optimizationResultJson().isBlank())
+                .limit(20)
+                .map(task -> new ResumeOptimizationHistoryResult(task.taskId(), task.resumeId(), task.originalFilename(),
+                        task.jobDescription(), JSON.parseObject(task.optimizationResultJson(), CvOptimizationResult.class), task.optimizedAt()))
+                .toList();
     }
 
     public InterviewPlan planInterview(Long userId, String sessionId, Long resumeId, String jobDescription) {

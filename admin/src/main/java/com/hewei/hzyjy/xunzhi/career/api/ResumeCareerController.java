@@ -11,6 +11,7 @@ import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeEmbeddingResult;
+import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeOptimizationHistoryResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeParseTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeRenderStorageResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeUploadResult;
@@ -20,6 +21,8 @@ import com.hewei.hzyjy.xunzhi.common.convention.context.UserContext;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Result;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Results;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.CacheControl;
@@ -48,6 +51,9 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/xunzhi/v1")
 public class ResumeCareerController {
+
+    private static final long RESUME_OPTIMIZATION_STREAM_TIMEOUT_MILLIS = 15 * 60 * 1000L;
+    private static final Logger log = LoggerFactory.getLogger(ResumeCareerController.class);
 
     private final ResumeApplicationService resumeApplicationService;
     private final TaskExecutor careerTaskExecutor;
@@ -86,6 +92,12 @@ public class ResumeCareerController {
             @RequestParam(value = "status", required = false) String status,
             @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.listParseTasks(currentUser.getUserId(), status));
+    }
+
+    @GetMapping("/resumes/optimization-history")
+    public Result<java.util.List<ResumeOptimizationHistoryResult>> listOptimizationHistory(
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.listOptimizationHistory(currentUser.getUserId()));
     }
 
     @PostMapping("/resumes/parse-tasks/{taskId}/cancel")
@@ -173,7 +185,12 @@ public class ResumeCareerController {
             @PathVariable Long resumeId,
             @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
             @CurrentUser UserContext currentUser) throws IOException {
-        SseEmitter emitter = new SseEmitter(120000L);
+        // One optimization can include several provider calls, so the stream must outlive a single model timeout.
+        SseEmitter emitter = new SseEmitter(RESUME_OPTIMIZATION_STREAM_TIMEOUT_MILLIS);
+        emitter.onTimeout(() -> log.warn("Resume optimization stream timed out, userId={}, resumeId={}",
+                currentUser.getUserId(), resumeId));
+        emitter.onError(ex -> log.warn("Resume optimization stream transport failed, userId={}, resumeId={}",
+                currentUser.getUserId(), resumeId, ex));
         sendEvent(emitter, "START", "resume optimization started");
         careerTaskExecutor.execute(() -> {
             try {
@@ -188,15 +205,21 @@ public class ResumeCareerController {
                                 throw new IllegalStateException("Failed to stream optimization iteration", ex);
                             }
                         });
+                log.info("Resume optimization completed, streaming result, userId={}, resumeId={}",
+                        currentUser.getUserId(), resumeId);
                 sendEvent(emitter, "COMPLETE", result);
-                emitter.complete();
             } catch (Exception ex) {
+                log.warn("Resume optimization failed, streaming error, userId={}, resumeId={}",
+                        currentUser.getUserId(), resumeId, ex);
                 try {
                     sendEvent(emitter, "ERROR", ex.getMessage() == null ? "resume optimization failed" : ex.getMessage());
-                    emitter.complete();
-                } catch (IOException sendError) {
-                    emitter.completeWithError(sendError);
+                } catch (Exception sendError) {
+                    log.warn("Resume optimization error event could not be written, userId={}, resumeId={}",
+                            currentUser.getUserId(), resumeId, sendError);
                 }
+            } finally {
+                // A disconnected client can make event writes fail; always release the SSE response.
+                emitter.complete();
             }
         });
         return emitter;

@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -73,6 +74,23 @@ class ResumeCareerControllerTest {
         assertEquals("PROCESSING", ((Map<?, ?>) controller.eventData().get(1)).get("status"));
         assertEquals(0.78, ((Map<?, ?>) controller.eventData().get(1)).get("score"));
         assertEquals("feedback-2", ((Map<?, ?>) controller.eventData().get(2)).get("feedback"));
+    }
+
+    @Test
+    void optimizeStreamFinishesWhenErrorEventCannotBeWritten() throws Exception {
+        ResumeApplicationService service = mock(ResumeApplicationService.class);
+        ManualTaskExecutor taskExecutor = new ManualTaskExecutor();
+        FailingErrorEventResumeCareerController controller = new FailingErrorEventResumeCareerController(service, taskExecutor);
+        ResumeOptimizeReqDTO request = new ResumeOptimizeReqDTO();
+        request.setJobDescription("Java backend JD");
+        UserContext user = new UserContext(7L, "candidate");
+        when(service.optimize(eq(7L), eq(11L), eq("Java backend JD"), any()))
+                .thenThrow(new IllegalStateException("model unavailable"));
+
+        controller.optimizeStream(11L, request, user);
+
+        assertDoesNotThrow(taskExecutor::runNext);
+        assertEquals(List.of("START", "ERROR"), controller.eventNames());
     }
 
     @Test
@@ -177,12 +195,26 @@ class ResumeCareerControllerTest {
             eventData.add(data);
         }
 
-        private List<String> eventNames() {
+        protected List<String> eventNames() {
             return eventNames;
         }
 
         private List<Object> eventData() {
             return eventData;
+        }
+    }
+
+    private static class FailingErrorEventResumeCareerController extends RecordingResumeCareerController {
+        private FailingErrorEventResumeCareerController(ResumeApplicationService service, TaskExecutor taskExecutor) {
+            super(service, taskExecutor);
+        }
+
+        @Override
+        protected void sendEvent(SseEmitter emitter, String name, Object data) throws IOException {
+            super.sendEvent(emitter, name, data);
+            if ("ERROR".equals(name)) {
+                throw new IllegalStateException("client stream closed");
+            }
         }
     }
 }
