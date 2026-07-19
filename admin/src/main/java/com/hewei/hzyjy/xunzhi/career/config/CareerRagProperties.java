@@ -7,6 +7,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "xunzhi-agent.career.rag")
 public class CareerRagProperties {
 
+    /** Enables semantic resume retrieval; false switches to the non-RAG experiment baseline. */
+    private boolean enabled = true;
+
     private double vectorMinScoreCoarse = 0.60;
 
     private double vectorMinScoreFine = 0.55;

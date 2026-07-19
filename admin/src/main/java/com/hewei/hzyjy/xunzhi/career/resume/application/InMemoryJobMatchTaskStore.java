@@ -3,6 +3,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -20,6 +21,16 @@ public class InMemoryJobMatchTaskStore implements JobMatchTaskStore {
     @Override
     public Optional<JobMatchTaskResult> findByTaskId(String taskId) {
         return Optional.ofNullable(tasks.get(taskId));
+    }
+
+    @Override
+    public List<JobMatchHistoryItem> findRecentByUserId(Long userId, int limit) {
+        return tasks.values().stream()
+                .filter(task -> userId != null && userId.equals(task.userId()))
+                .limit(Math.max(1, limit))
+                .map(task -> new JobMatchHistoryItem(task.taskId(), task.status(), "", task.selectedResumeIds().size(),
+                        task.matchedResumes(), task.errorMessage(), null))
+                .toList();
     }
 
     @Override

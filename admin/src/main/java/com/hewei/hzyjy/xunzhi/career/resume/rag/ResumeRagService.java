@@ -51,6 +51,10 @@ public class ResumeRagService {
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
 
+    public boolean enabled() {
+        return ragProperties.isEnabled();
+    }
+
     public List<ResumeChunk> storeCvBO(CvBO cv) {
         List<ResumeChunk> chunks = resumeChunker.chunk(cv);
         if (chunks.isEmpty()) {
@@ -96,10 +100,19 @@ public class ResumeRagService {
     }
 
     public List<String> retrieveTemplates(String query, int limit, Long userId, Set<String> allowedResumeIds) {
+        return retrieveTemplates(query, limit, userId, allowedResumeIds, ragProperties.isEnabled());
+    }
+
+    public List<String> retrieveTemplates(String query, int limit, Long userId, Set<String> allowedResumeIds, boolean enabled) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
         long start = System.currentTimeMillis();
+        if (!enabled) {
+            publishRecallMetric(query, userId, allowedResumeIds == null ? 0 : allowedResumeIds.size(), 0, start,
+                    "resume-template-retrieval", false);
+            return List.of();
+        }
         Set<String> resumeScope = allowedResumeIds == null ? Set.of() : allowedResumeIds;
         Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
         List<String> allQueries = new ArrayList<>();
@@ -124,7 +137,65 @@ public class ResumeRagService {
         List<String> results = rerank(query, augmented, limit);
         log.info("Career resume RAG completed. querySize={}, userId={}, scope={}, candidates={}, results={}, costMs={}",
                 query.length(), userId, resumeScope.size(), candidateResumeIds.size(), results.size(), System.currentTimeMillis() - start);
+        publishRecallMetric(query, userId, resumeScope.size(), results.size(), start, "resume-template-retrieval", true);
         return results;
+    }
+
+    /**
+     * Runs the same scoped hybrid recall as template retrieval but keeps resume identity so callers can
+     * compare selected resume versions. No resume outside {@code allowedResumeIds} is returned.
+     */
+    public List<ResumeRagMatch> retrieveResumeMatches(String query, int limit, Long userId, Set<String> allowedResumeIds) {
+        return retrieveResumeMatches(query, limit, userId, allowedResumeIds, ragProperties.isEnabled());
+    }
+
+    public List<ResumeRagMatch> retrieveResumeMatches(String query, int limit, Long userId, Set<String> allowedResumeIds, boolean enabled) {
+        if (query == null || query.isBlank() || allowedResumeIds == null || allowedResumeIds.isEmpty()) {
+            return List.of();
+        }
+        long start = System.currentTimeMillis();
+        if (!enabled) {
+            publishRecallMetric(query, userId, allowedResumeIds.size(), 0, start, "resume-job-match-retrieval", false);
+            return List.of();
+        }
+        Set<String> resumeScope = new LinkedHashSet<>(allowedResumeIds);
+        Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
+        List<String> allQueries = new ArrayList<>();
+        allQueries.add(query);
+        String hyde = generateHyDE(query);
+        if (hyde != null && !hyde.isBlank()) {
+            allQueries.add(hyde);
+        }
+        allQueries.addAll(generateMultiQueries(query));
+        Set<String> candidateResumeIds = hierarchicalCoarseSearch(allQueries, ragProperties.getCoarseRecallLimit(), resumeScope, metadataFilters);
+        if (candidateResumeIds.isEmpty()) {
+            candidateResumeIds = resumeScope;
+        }
+        List<RetrievedChunk> chunks = hybridFineSearch(
+                allQueries,
+                candidateResumeIds,
+                metadataFilters,
+                Math.max(limit, 1) * ragProperties.getFineRecallMultiplier());
+        Map<String, List<RetrievedChunk>> byResume = chunks.stream()
+                .collect(Collectors.groupingBy(RetrievedChunk::resumeId, LinkedHashMap::new, Collectors.toList()));
+        List<ResumeRagMatch> matches = resumeScope.stream()
+                .map(resumeId -> {
+                    List<RetrievedChunk> evidence = byResume.getOrDefault(resumeId, List.of());
+                    double score = evidence.stream().mapToDouble(RetrievedChunk::rrfScore).sum();
+                    List<String> snippets = evidence.stream()
+                            .sorted(Comparator.comparingDouble(RetrievedChunk::rrfScore).reversed())
+                            .map(RetrievedChunk::text)
+                            .filter(text -> text != null && !text.isBlank())
+                            .map(text -> text.length() > 180 ? text.substring(0, 180) + "..." : text)
+                            .limit(3)
+                            .toList();
+                    return new ResumeRagMatch(resumeId, score, snippets);
+                })
+                .sorted(Comparator.comparingDouble(ResumeRagMatch::score).reversed())
+                .limit(Math.max(1, limit))
+                .toList();
+        publishRecallMetric(query, userId, resumeScope.size(), matches.size(), start, "resume-job-match-retrieval", true);
+        return matches;
     }
 
     private String generateHyDE(String query) {
@@ -441,6 +512,21 @@ public class ResumeRagService {
                 Instant.now(),
                 metadata == null ? Map.of() : metadata
         ));
+    }
+
+    private void publishRecallMetric(String query, Long userId, int resumeScope, int resultCount, long startMillis, String toolName, boolean ragEnabled) {
+        long durationMs = Math.max(0, System.currentTimeMillis() - startMillis);
+        log.info("性能指标 指标名称=RAG召回完成 RAG开关={} 召回类型={} 用户编号={} 简历范围数量={} 结果数量={} 召回耗时毫秒={}",
+                ragEnabled, toolName, userId, resumeScope, resultCount, durationMs);
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher != null) {
+            tracePublisher.tool(new AiToolExecutionEvent(
+                    UUID.randomUUID().toString(), "resume-rag", null, "JD_ALIGNMENT", toolName,
+                    abbreviate(query, 1000), "results=" + resultCount, true, durationMs, 0, null, Instant.now(),
+                    Map.of("指标名称", "RAG召回完成", "RAG开关", ragEnabled, "用户编号", userId == null ? 0L : userId,
+                            "简历范围数量", resumeScope, "结果数量", resultCount, "召回耗时毫秒", durationMs)
+            ));
+        }
     }
 
     private String abbreviate(String value, int max) {

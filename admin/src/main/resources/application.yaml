@@ -15,9 +15,9 @@ spring:
       max-request-size: 100MB
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:mainshi_agent}?useUnicode=true&characterEncoding=UTF-8&rewriteBatchedStatements=true&allowMultiQueries=true&serverTimezone=${APP_TIMEZONE:Asia/Shanghai}
-    username: ${MYSQL_USERNAME:root}
-    password: ${MYSQL_PASSWORD:123456}
+    url: jdbc:mysql://localhost:3306/mainshi_agent?useUnicode=true&characterEncoding=UTF-8&rewriteBatchedStatements=true&allowMultiQueries=true&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
   data:
     mongodb:
       host: ${MONGODB_HOST:127.0.0.1}
@@ -49,15 +49,17 @@ spring:
         thread-name-prefix: redis-session-async-
   ai:
     openai:
-      api-key: ${SPRING_AI_OPENAI_API_KEY:sk-xxxxxxxxxxxxx}
-      base-url: ${SPRING_AI_OPENAI_BASE_URL:https://api.openai.com}
+      api-key: ${SPRING_AI_OPENAI_API_KEY:tp-c37uevoqy9xaa46v0kia8tc9h5cmt4xvyyjstgdbqroxcmqd}
+      # Spring AI appends /v1/chat/completions itself. Mimo's OpenAI SDK URL includes /v1,
+      # but using it here would produce /v1/v1/chat/completions and a 404 response.
+      base-url: ${SPRING_AI_OPENAI_BASE_URL:https://token-plan-cn.xiaomimimo.com}
       chat:
         options:
-          model: ${SPRING_AI_OPENAI_MODEL:gpt-4o-mini}
+          model: ${SPRING_AI_OPENAI_MODEL:mimo-v2.5-pro}
           temperature: ${SPRING_AI_OPENAI_TEMPERATURE:0.7}
-      embedding:
-        options:
-          model: ${SPRING_AI_OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+#      embedding:
+#        options:
+#          model: ${SPRING_AI_OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
 
 management:
   endpoints:
@@ -82,17 +84,25 @@ collection:
 
 xunfei:
   lat-key:
-    app-id: ${XUNFEI_APP_ID:b00b747e}
-    api-key: ${XUNFEI_API_KEY:86f9f60da8d9f65a979dec8ed4978997}
-    api-secret: ${XUNFEI_API_SECRET:ZjMyNTgyY2RiYmEzMWQ0NGQzYTVmMTNj}
+    app-id: ${XUNFEI_APP_ID:5b613634}
+    api-key: ${XUNFEI_API_KEY:35b1a5e0976d4480db22e87d5bc40c9c}
+    api-secret: ${XUNFEI_API_SECRET:YjNiYzc4YTQzNWE2NGMzMTQ2Y2ZhZjBj}
     rta-api-key: ${XUNFEI_RTA_API_KEY:}
 
 xunzhi-agent:
+  embedding:
+    enabled: ${XUNZHI_EMBEDDING_ENABLED:true}
+    base-url: ${XUNZHI_EMBEDDING_BASE_URL:https://llm-j8zzdwpj4upy4xxe.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}
+    api-key: ${XUNZHI_EMBEDDING_API_KEY:sk-697f9f8496b74976a8429f990a5ef1dc}
+    model: ${XUNZHI_EMBEDDING_MODEL:text-embedding-v4}
+    dimensions: ${XUNZHI_EMBEDDING_DIMENSIONS:1024}
+    timeout-seconds: ${XUNZHI_EMBEDDING_TIMEOUT_SECONDS:15}
   langchain4j:
     enabled: ${XUNZHI_LANGCHAIN4J_ENABLED:true}
-    base-url: ${XUNZHI_LANGCHAIN4J_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-    api-key: ${XUNZHI_LANGCHAIN4J_API_KEY:${DASHSCOPE_API_KEY:}}
-    chat-model: ${XUNZHI_LANGCHAIN4J_CHAT_MODEL:qwen-plus}
+    base-url: ${XUNZHI_LANGCHAIN4J_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
+    api-key: ${XUNZHI_LANGCHAIN4J_API_KEY:${spring.ai.openai.api-key:}}
+    chat-model: ${XUNZHI_LANGCHAIN4J_CHAT_MODEL:mimo-v2.5-pro}
+    timeout-seconds: ${XUNZHI_LANGCHAIN4J_TIMEOUT_SECONDS:90}
     embedding-model: ${XUNZHI_LANGCHAIN4J_EMBEDDING_MODEL:text-embedding-v3}
     agentic-native-listeners-enabled: ${XUNZHI_LANGCHAIN4J_AGENTIC_NATIVE_LISTENERS_ENABLED:false}
     qdrant:
@@ -103,10 +113,19 @@ xunzhi-agent:
       use-tls: ${XUNZHI_QDRANT_USE_TLS:false}
       api-key: ${XUNZHI_QDRANT_API_KEY:}
       payload-text-key: ${XUNZHI_QDRANT_PAYLOAD_TEXT_KEY:content}
-      vector-size: ${XUNZHI_QDRANT_VECTOR_SIZE:1024}
+      vector-size: ${XUNZHI_QDRANT_VECTOR_SIZE:${XUNZHI_EMBEDDING_DIMENSIONS:1024}}
       timeout-millis: ${XUNZHI_QDRANT_TIMEOUT_MILLIS:3000}
   career:
+    ocr:
+      enabled: ${XUNZHI_CAREER_OCR_ENABLED:true}
+      provider: ${XUNZHI_CAREER_OCR_PROVIDER:xunfei-pdf}
+      app-id: ${XUNZHI_CAREER_OCR_APP_ID:}
+      api-secret: ${XUNZHI_CAREER_OCR_API_SECRET:}
+      max-pages: ${XUNZHI_CAREER_OCR_MAX_PAGES:40}
+      timeout-seconds: ${XUNZHI_CAREER_OCR_TIMEOUT_SECONDS:90}
+      poll-interval-seconds: ${XUNZHI_CAREER_OCR_POLL_INTERVAL_SECONDS:5}
     rag:
+      enabled: ${XUNZHI_CAREER_RAG_ENABLED:true}
       vector-min-score-coarse: ${XUNZHI_CAREER_RAG_VECTOR_MIN_SCORE_COARSE:0.60}
       vector-min-score-fine: ${XUNZHI_CAREER_RAG_VECTOR_MIN_SCORE_FINE:0.55}
       rrf-k: ${XUNZHI_CAREER_RAG_RRF_K:60}
@@ -183,10 +202,10 @@ xunzhi-agent:
     scheduled-thread-name-prefix: xunzhi-schedule-
   agent-binding:
     general-agent-chat: ${XUNZHI_AGENT_GENERAL_CHAT:general-agent-chat}
-    interview-question-extraction: ${XUNZHI_AGENT_INTERVIEW_QUESTION_EXTRACTION:interview-question-extraction}
-    interview-answer-evaluation: ${XUNZHI_AGENT_INTERVIEW_ANSWER_EVALUATION:interview-answer-evaluation}
-    interview-demeanor: ${XUNZHI_AGENT_INTERVIEW_DEMEANOR:interview-demeanor}
-    interview-question-asking: ${XUNZHI_AGENT_INTERVIEW_QUESTION_ASKING:interview-question-asking}
+    interview-question-extraction: "${XUNZHI_AGENT_INTERVIEW_QUESTION_EXTRACTION:\u9762\u8BD5\u51FA\u9898\u5B98}"
+    interview-answer-evaluation: "${XUNZHI_AGENT_INTERVIEW_ANSWER_EVALUATION:\u7528\u6237\u7B54\u6848\u8BC4\u5206\u5B98}"
+    interview-demeanor: "${XUNZHI_AGENT_INTERVIEW_DEMEANOR:\u795E\u6001\u5206\u6790\u5B98}"
+    interview-question-asking: "${XUNZHI_AGENT_INTERVIEW_QUESTION_ASKING:\u9762\u8BD5\u63D0\u95EE\u5B98}"
     resume-analysis: ${XUNZHI_AGENT_RESUME_ANALYSIS:resume-analysis}
     resume-review: ${XUNZHI_AGENT_RESUME_REVIEW:resume-review}
     resume-tailor: ${XUNZHI_AGENT_RESUME_TAILOR:resume-tailor}

@@ -16,6 +16,7 @@ import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
+import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagMatch;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderService;
@@ -34,9 +35,14 @@ import java.io.InputStream;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -138,23 +144,47 @@ public class ResumeApplicationService {
         return embeddingOwned(userId, resumeId, true);
     }
 
-    public JobMatchTaskResult matchResumes(Long userId, String jobDescription, int limit) {
+    public JobMatchTaskResult matchResumes(Long userId, String jobDescription, List<Long> requestedResumeIds, int limit) {
+        return matchResumes(userId, jobDescription, requestedResumeIds, limit, null);
+    }
+
+    public JobMatchTaskResult matchResumes(Long userId, String jobDescription, List<Long> requestedResumeIds, int limit, Boolean ragOverride) {
         validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
+        List<ResumeParseTaskRecord> selectedTasks = validateSelectedMatchResumes(userId, requestedResumeIds);
+        List<Long> selectedResumeIds = selectedTasks.stream().map(ResumeParseTaskRecord::resumeId).toList();
         String taskId = UUID.randomUUID().toString();
         int boundedLimit = Math.min(limit <= 0 ? 3 : limit, 20);
-        JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId);
+        JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId, selectedResumeIds);
         jobMatchTaskStore.save(started, jobDescription, boundedLimit, null);
         long start = System.currentTimeMillis();
         try {
-            Set<String> resumeIds = ensureUserResumeEmbeddings(userId);
-            List<String> templates = resumeRagService.retrieveTemplates(jobDescription, boundedLimit, userId, resumeIds);
-            JobMatchTaskResult completed = JobMatchTaskResult.completed(taskId, userId, templates);
+            Map<Long, ResumeParseTaskRecord> tasksByResumeId = selectedTasks.stream()
+                    .collect(java.util.stream.Collectors.toMap(ResumeParseTaskRecord::resumeId, task -> task, (left, right) -> left, LinkedHashMap::new));
+            List<CvBO> selectedResumes = selectedResumeIds.stream().map(resumeId -> getResume(userId, resumeId)).toList();
+            selectedResumes.forEach(this::ensureResumeEmbedding);
+            Set<String> resumeIds = selectedResumeIds.stream().map(String::valueOf)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
+            List<ResumeRagMatch> ragMatches = resumeRagService.retrieveResumeMatches(jobDescription, boundedLimit, userId, resumeIds, ragEnabled);
+            Map<Long, CvBO> resumesById = selectedResumes.stream()
+                    .collect(java.util.stream.Collectors.toMap(CvBO::getId, cv -> cv));
+            if (!ragEnabled) {
+                ragMatches = selectedResumes.stream()
+                        .map(cv -> new ResumeRagMatch(String.valueOf(cv.getId()),
+                                matchedTokens(jobDescription, String.valueOf(cv)).size(), List.of()))
+                        .sorted(java.util.Comparator.comparingDouble(ResumeRagMatch::score).reversed())
+                        .limit(boundedLimit)
+                        .toList();
+            }
+            List<JobMatchCandidate> candidates = toJobMatchCandidates(jobDescription, ragMatches, resumesById, tasksByResumeId);
+            List<String> templates = ragMatches.stream().flatMap(match -> match.evidence().stream()).toList();
+            JobMatchTaskResult completed = JobMatchTaskResult.completed(taskId, userId, selectedResumeIds, candidates, templates);
             publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
-                    "matched=" + templates.size(), true, start, null, Map.of("userId", userId, "resumeScope", resumeIds.size()));
+                    "matched=" + candidates.size(), true, start, null, Map.of("userId", userId, "resumeScope", resumeIds.size()));
             return jobMatchTaskStore.save(completed, jobDescription, boundedLimit, null);
         } catch (Exception ex) {
             log.warn("Career job match task failed. taskId={}", taskId, ex);
-            JobMatchTaskResult failed = JobMatchTaskResult.failed(taskId, userId, ex.getMessage());
+            JobMatchTaskResult failed = JobMatchTaskResult.failed(taskId, userId, selectedResumeIds, ex.getMessage());
             publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
                     "FAILED", false, start, ex.getMessage(), Map.of("userId", userId));
             return jobMatchTaskStore.save(failed, jobDescription, boundedLimit, ex.getMessage());
@@ -165,8 +195,12 @@ public class ResumeApplicationService {
         return jobMatchTaskStore.findByTaskIdAndUserId(taskId, userId).orElseGet(() -> JobMatchTaskResult.notFound(taskId));
     }
 
+    public List<JobMatchHistoryItem> listMatchHistory(Long userId) {
+        return jobMatchTaskStore.findRecentByUserId(userId, 20);
+    }
+
     public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription) {
-        return optimize(userId, resumeId, jobDescription, null);
+        return optimize(userId, resumeId, jobDescription, (Consumer<CvReview>) null, (Boolean) null);
     }
 
     public CvOptimizationResult optimize(
@@ -174,10 +208,26 @@ public class ResumeApplicationService {
             Long resumeId,
             String jobDescription,
             Consumer<CvReview> progressCallback) {
+        return optimize(userId, resumeId, jobDescription, progressCallback, null);
+    }
+
+    public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription, Boolean ragOverride) {
+        return optimize(userId, resumeId, jobDescription, null, ragOverride);
+    }
+
+    public CvOptimizationResult optimize(
+            Long userId, Long resumeId, String jobDescription, Boolean ragOverride, Consumer<CvReview> progressCallback) {
+        return optimize(userId, resumeId, jobDescription, progressCallback, ragOverride);
+    }
+
+    private CvOptimizationResult optimize(
+            Long userId, Long resumeId, String jobDescription, Consumer<CvReview> progressCallback, Boolean ragOverride) {
+        long optimizationStart = System.currentTimeMillis();
         validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
-        List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)));
+        boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
+        List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)), ragEnabled);
         String resumeMemoryId = memoryId(resumeId);
         final int[] iterationCounter = {0};
         Consumer<CvReview> memoryAwareProgressCallback = review -> {
@@ -224,6 +274,14 @@ public class ResumeApplicationService {
                 .filter(task -> resumeId.equals(task.resumeId()))
                 .findFirst()
                 .ifPresent(task -> resumeParseTaskStore.save(task.withOptimization(jobDescription, JSON.toJSONString(response))));
+        long durationMs = System.currentTimeMillis() - optimizationStart;
+        log.info("性能指标 指标名称=简历优化完成 RAG开关={} 用户编号={} 简历编号={} 总耗时毫秒={} 迭代次数={} 评分达标={}",
+                ragEnabled, userId, resumeId, durationMs, response.iterations(), response.scoreGatePassed());
+        publishTool(UUID.randomUUID().toString(), memoryId(resumeId), "RESUME_TAILOR", "resume-optimization-total",
+                jobDescription, "completed", true, optimizationStart, null,
+                Map.of("指标名称", "简历优化完成", "RAG开关", ragEnabled, "RAG来源", ragOverride == null ? "后端默认配置" : "前端单次选择", "用户编号", userId, "简历编号", resumeId,
+                        "总耗时毫秒", durationMs, "迭代次数", response.iterations(),
+                        "评分达标", Boolean.TRUE.equals(response.scoreGatePassed())));
         return response;
     }
 
@@ -272,6 +330,10 @@ public class ResumeApplicationService {
         validateUpload(file);
         String taskId = UUID.randomUUID().toString();
         byte[] snapshot = readFileSnapshot(file);
+        ResumeParseTaskRecord duplicate = findDuplicateUpload(userId, sha256(snapshot));
+        if (duplicate != null) {
+            return toParseTaskResult(duplicate);
+        }
         ResumeObjectStorageResult storage = storeAsyncUpload(taskId, file, snapshot);
         Instant now = Instant.now();
         ResumeParseTaskRecord task = new ResumeParseTaskRecord(
@@ -306,7 +368,11 @@ public class ResumeApplicationService {
     }
 
     public List<ResumeParseTaskResult> listParseTasks(Long userId, String status) {
-        return resumeParseTaskStore.findByUserId(userId, status).stream()
+        List<ResumeParseTaskRecord> tasks = resumeParseTaskStore.findByUserId(userId, status);
+        if (ResumeParseTaskStatus.COMPLETED.name().equalsIgnoreCase(status)) {
+            tasks = hideDuplicateCompletedTasks(tasks);
+        }
+        return tasks.stream()
                 .map(this::toParseTaskResult)
                 .toList();
     }
@@ -396,12 +462,14 @@ public class ResumeApplicationService {
         if (task == null || task.status() == ResumeParseTaskStatus.CANCELED) {
             return;
         }
+        long parseStart = System.currentTimeMillis();
         try {
             if (task.status() == ResumeParseTaskStatus.SAVING && task.resumeId() != null) {
                 CvBO existing = resumeStore.findByIdAndUserId(task.resumeId(), task.userId())
                         .orElseThrow(() -> new IllegalStateException("Resume parse recovery failed: saved resume not found"));
                 doEmbedding(existing, false);
                 resumeParseTaskStore.save(task.completed(existing.getId()));
+                publishParseMetric(task, existing.getId(), parseStart, true, null);
                 return;
             }
             task = task.withStatus(ResumeParseTaskStatus.ANALYZING);
@@ -418,6 +486,7 @@ public class ResumeApplicationService {
                     .build());
             doEmbedding(saved, false);
             resumeParseTaskStore.save(task.completed(saved.getId()));
+            publishParseMetric(task, saved.getId(), parseStart, true, null);
         } catch (Exception ex) {
             ResumeParseTaskRecord latest = resumeParseTaskStore.findByTaskId(taskId).orElse(task);
             if (latest != null && latest.status() == ResumeParseTaskStatus.CANCELED) {
@@ -425,6 +494,7 @@ public class ResumeApplicationService {
             }
             ResumeParseTaskRecord failed = (latest == null ? task : latest).failed(ex.getMessage());
             resumeParseTaskStore.save(failed);
+            publishParseMetric(task, task.resumeId(), parseStart, false, ex.getMessage());
             log.warn("Resume parse task failed, taskId={}, userId={}", taskId, task.userId(), ex);
         }
     }
@@ -433,6 +503,71 @@ public class ResumeApplicationService {
         return resumeParseTaskStore.findByTaskIdAndUserId(taskId, userId)
                 .map(task -> task.status() == ResumeParseTaskStatus.CANCELED)
                 .orElse(true);
+    }
+
+    private void publishParseMetric(ResumeParseTaskRecord task, Long resumeId, long startMillis, boolean success, String errorMessage) {
+        long durationMs = Math.max(0, System.currentTimeMillis() - startMillis);
+        log.info("性能指标 指标名称=PDF解析完成 任务编号={} 用户编号={} 简历编号={} 解析耗时毫秒={} 成功={} 文件大小字节={}",
+                task.taskId(), task.userId(), resumeId, durationMs, success, task.fileSize());
+        publishTool(task.taskId(), "resume-parse:" + task.taskId(), "RESUME_ANALYSIS", "resume-pdf-parse",
+                task.originalFilename(), success ? "completed" : "failed", success, startMillis, errorMessage,
+                Map.of("指标名称", "PDF解析完成", "任务编号", task.taskId(), "用户编号", task.userId(),
+                        "简历编号", String.valueOf(resumeId), "文件大小字节", task.fileSize() == null ? 0L : task.fileSize(), "解析耗时毫秒", durationMs));
+    }
+
+    /** Finds an exact-content duplicate for one user without using filename as a proxy. */
+    private ResumeParseTaskRecord findDuplicateUpload(Long userId, String fileHash) {
+        if (!StringUtils.hasText(fileHash)) {
+            return null;
+        }
+        return resumeParseTaskStore.findByUserId(userId, null).stream()
+                .filter(task -> fileHash.equals(taskFileHash(task)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** Keeps one completed record per exact file; historical rows remain intact but are not listed. */
+    private List<ResumeParseTaskRecord> hideDuplicateCompletedTasks(List<ResumeParseTaskRecord> tasks) {
+        Map<String, ResumeParseTaskRecord> unique = new LinkedHashMap<>();
+        tasks.stream()
+                .sorted(java.util.Comparator.comparing(ResumeParseTaskRecord::createTime,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                .forEach(task -> unique.putIfAbsent(taskFileHash(task), task));
+        return unique.values().stream()
+                .sorted(java.util.Comparator.comparing(ResumeParseTaskRecord::createTime,
+                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                .toList();
+    }
+
+    private String taskFileHash(ResumeParseTaskRecord task) {
+        if (task == null) {
+            return "";
+        }
+        byte[] snapshot = task.fileSnapshot();
+        if (snapshot.length > 0) {
+            return sha256(snapshot);
+        }
+        if (resumeObjectStorage.enabled() && StringUtils.hasText(task.storageKey())) {
+            try (InputStream input = resumeObjectStorage.get(task.storageKey())) {
+                return input == null ? "task:" + task.taskId() : sha256(input.readAllBytes());
+            } catch (Exception ex) {
+                log.debug("Unable to calculate resume duplicate hash. taskId={}", task.taskId(), ex);
+            }
+        }
+        return "task:" + task.taskId();
+    }
+
+    private String sha256(byte[] content) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(content == null ? new byte[0] : content);
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte value : digest) {
+                hex.append(String.format("%02x", value));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 is unavailable", ex);
+        }
     }
 
     private ResumeEmbeddingResult doEmbedding(CvBO cv, boolean failOnError) {
@@ -458,6 +593,83 @@ public class ResumeApplicationService {
             }
             return ResumeEmbeddingResult.failed(cv.getId(), ex.getMessage());
         }
+    }
+
+    private List<ResumeParseTaskRecord> validateSelectedMatchResumes(Long userId, List<Long> requestedResumeIds) {
+        if (requestedResumeIds == null || requestedResumeIds.isEmpty()) {
+            throw new IllegalArgumentException("Select at least one completed resume before matching");
+        }
+        if (requestedResumeIds.size() > 20 || new LinkedHashSet<>(requestedResumeIds).size() != requestedResumeIds.size()) {
+            throw new IllegalArgumentException("Selected resume IDs must be unique and cannot exceed 20");
+        }
+        Map<Long, ResumeParseTaskRecord> completed = resumeParseTaskStore
+                .findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name()).stream()
+                .filter(task -> task.resumeId() != null)
+                .collect(java.util.stream.Collectors.toMap(ResumeParseTaskRecord::resumeId, task -> task, (left, right) -> left));
+        List<ResumeParseTaskRecord> selected = new ArrayList<>();
+        for (Long resumeId : requestedResumeIds) {
+            ResumeParseTaskRecord task = resumeId == null ? null : completed.get(resumeId);
+            if (task == null) {
+                throw new IllegalArgumentException("Selected resume is unavailable, unfinished, or not owned by the current user: " + resumeId);
+            }
+            selected.add(task);
+        }
+        return selected;
+    }
+
+    private List<JobMatchCandidate> toJobMatchCandidates(
+            String jobDescription,
+            List<ResumeRagMatch> ragMatches,
+            Map<Long, CvBO> resumesById,
+            Map<Long, ResumeParseTaskRecord> tasksByResumeId) {
+        double maxScore = ragMatches.stream().mapToDouble(ResumeRagMatch::score).max().orElse(0.0);
+        List<JobMatchCandidate> candidates = new ArrayList<>();
+        for (int index = 0; index < ragMatches.size(); index++) {
+            ResumeRagMatch match = ragMatches.get(index);
+            Long resumeId;
+            try {
+                resumeId = Long.valueOf(match.resumeId());
+            } catch (NumberFormatException ex) {
+                continue;
+            }
+            CvBO resume = resumesById.get(resumeId);
+            if (resume == null) {
+                continue;
+            }
+            List<String> matchedPoints = matchedTokens(jobDescription, String.valueOf(resume));
+            List<String> missingPoints = missingTokens(jobDescription, String.valueOf(resume));
+            int rank = index + 1;
+            int score = maxScore <= 0.0 ? 0 : (int) Math.round(Math.min(100.0, 100.0 * match.score() / maxScore));
+            ResumeParseTaskRecord task = tasksByResumeId.get(resumeId);
+            candidates.add(new JobMatchCandidate(
+                    resumeId,
+                    task == null ? resume.getName() : task.originalFilename(),
+                    rank,
+                    score,
+                    rank == 1 ? "最推荐" : rank == 2 ? "推荐" : "可备选",
+                    matchedPoints.isEmpty() ? match.evidence() : matchedPoints,
+                    missingPoints));
+        }
+        return candidates;
+    }
+
+    private List<String> matchedTokens(String jobDescription, String resumeText) {
+        String normalizedResume = resumeText == null ? "" : resumeText.toLowerCase();
+        return jobTokens(jobDescription).stream().filter(normalizedResume::contains).limit(8).toList();
+    }
+
+    private List<String> missingTokens(String jobDescription, String resumeText) {
+        String normalizedResume = resumeText == null ? "" : resumeText.toLowerCase();
+        return jobTokens(jobDescription).stream().filter(token -> !normalizedResume.contains(token)).limit(6).toList();
+    }
+
+    private List<String> jobTokens(String jobDescription) {
+        return java.util.Arrays.stream((jobDescription == null ? "" : jobDescription).toLowerCase().split("[^\\p{IsHan}\\p{Alnum}#+.]+"))
+                .map(String::trim)
+                .filter(token -> token.length() >= 2)
+                .distinct()
+                .limit(32)
+                .toList();
     }
 
     private Set<String> ensureUserResumeEmbeddings(Long userId) {

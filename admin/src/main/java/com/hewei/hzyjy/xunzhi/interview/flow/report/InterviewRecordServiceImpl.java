@@ -68,6 +68,7 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
     private final InterviewFinalizeLockService interviewFinalizeLockService;
     private final InterviewSessionRuntimeSnapshotService runtimeSnapshotService;
     private final InterviewSessionRuntimeRehydrateService runtimeRehydrateService;
+    private final InterviewReportAiReviewer interviewReportAiReviewer;
 
     @Override
     public void saveInterviewRecord(String sessionId, Long userId, InterviewRecordSaveReqDTO requestParam) {
@@ -527,7 +528,12 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
         snapshot.put("flow", interviewQuestionCacheService.getInterviewFlow(session.getSessionId()));
         snapshot.put("turns", turns);
         snapshot.put("radar", radarChart);
-        snapshot.put("reviewFeedback", buildReviewFeedback(turns, radarChart, interviewSuggestions));
+        snapshot.put("reviewFeedback", buildReviewFeedback(
+                session.getSessionId(),
+                interviewDirection,
+                turns,
+                radarChart,
+                interviewSuggestions));
         snapshot.put("snapshotAt", new Date());
         return JSON.toJSONString(snapshot);
     }
@@ -555,7 +561,13 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
             turns = runtimeSnapshotService.loadPersistedTurns(sessionId);
         }
         respDTO.setPlaybackItems(buildPlaybackItems(turns));
-        respDTO.setReviewFeedback(resolveReviewFeedback(snapshot, turns, radarChart, record));
+        respDTO.setReviewFeedback(resolveReviewFeedback(
+                sessionId,
+                record == null ? null : record.getInterviewDirection(),
+                snapshot,
+                turns,
+                radarChart,
+                record));
     }
 
     private Map<String, Object> parseSnapshot(String snapshotJson) {
@@ -612,17 +624,18 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
     }
 
     private InterviewReviewFeedbackRespDTO resolveReviewFeedback(
+            String sessionId,
+            String interviewDirection,
             Map<String, Object> snapshot,
             List<InterviewTurnLog> turns,
             RadarChartDTO radarChart,
             InterviewRecordDO record) {
         String interviewSuggestions = record == null ? null : record.getInterviewSuggestions();
-        InterviewReviewFeedbackRespDTO rebuilt = buildReviewFeedback(turns, radarChart, interviewSuggestions);
-        if (hasReviewFeedbackContent(rebuilt)) {
-            return rebuilt;
-        }
         InterviewReviewFeedbackRespDTO parsed = parseReviewFeedbackFromSnapshot(snapshot);
-        return parsed != null ? parsed : rebuilt;
+        if (hasReviewFeedbackContent(parsed)) {
+            return parsed;
+        }
+        return buildFallbackReviewFeedback(turns, radarChart, interviewSuggestions);
     }
 
     private InterviewReviewFeedbackRespDTO parseReviewFeedbackFromSnapshot(Map<String, Object> snapshot) {
@@ -642,11 +655,30 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
     }
 
     private InterviewReviewFeedbackRespDTO buildReviewFeedback(
+            String sessionId,
+            String interviewDirection,
+            List<InterviewTurnLog> turns,
+            RadarChartDTO radarChart,
+            String interviewSuggestions) {
+        InterviewReviewFeedbackRespDTO generated = interviewReportAiReviewer.review(
+                sessionId,
+                interviewDirection,
+                turns,
+                radarChart,
+                interviewSuggestions);
+        if (hasReviewFeedbackContent(generated)) {
+            return generated;
+        }
+
+        return buildFallbackReviewFeedback(turns, radarChart, interviewSuggestions);
+    }
+
+    private InterviewReviewFeedbackRespDTO buildFallbackReviewFeedback(
             List<InterviewTurnLog> turns,
             RadarChartDTO radarChart,
             String interviewSuggestions) {
         InterviewReviewFeedbackRespDTO reviewFeedback = new InterviewReviewFeedbackRespDTO();
-        reviewFeedback.setOverallComment(buildOverallComment(radarChart));
+        reviewFeedback.setOverallComment(null);
         List<String> highlights = buildHighlights(turns, radarChart);
         List<String> improvementTips = buildImprovementTips(turns, radarChart);
         reviewFeedback.setHighlights(highlights);
@@ -663,27 +695,6 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
                 || (reviewFeedback.getHighlights() != null && !reviewFeedback.getHighlights().isEmpty())
                 || (reviewFeedback.getImprovementTips() != null && !reviewFeedback.getImprovementTips().isEmpty())
                 || (reviewFeedback.getNextActions() != null && !reviewFeedback.getNextActions().isEmpty());
-    }
-
-    private String buildOverallComment(RadarChartDTO radarChart) {
-        int finalScore = radarChart == null ? 0 : clampScore(radarChart.getPotentialIndex());
-        String baseComment;
-        if (finalScore >= 85) {
-            baseComment = "Overall performance is strong and already competitive for interviews.";
-        } else if (finalScore >= 70) {
-            baseComment = "Overall performance is solid, with clear strengths and room for further polishing.";
-        } else if (finalScore >= 60) {
-            baseComment = "Overall performance meets the baseline, but answer structure and role-fit still need improvement.";
-        } else {
-            baseComment = "Overall performance is below expectation; prioritize role-fit, depth of answers, and communication stability.";
-        }
-
-        String strongest = resolveDimensionLabel(findStrongestDimensionKey(radarChart));
-        String weakest = resolveDimensionLabel(findWeakestDimensionKey(radarChart));
-        if (StrUtil.isBlank(strongest) || StrUtil.isBlank(weakest) || strongest.equals(weakest)) {
-            return baseComment;
-        }
-        return baseComment + " Current strength is " + strongest + ", and prioritize improving " + weakest + ".";
     }
 
     private List<String> buildHighlights(List<InterviewTurnLog> turns, RadarChartDTO radarChart) {

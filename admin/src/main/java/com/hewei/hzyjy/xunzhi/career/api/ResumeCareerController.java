@@ -9,6 +9,7 @@ import com.hewei.hzyjy.xunzhi.career.api.io.InterviewReflectReqDTO;
 import com.hewei.hzyjy.xunzhi.career.api.io.JobMatchReqDTO;
 import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchTaskResult;
+import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchHistoryItem;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeEmbeddingResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeOptimizationHistoryResult;
@@ -161,8 +162,15 @@ public class ResumeCareerController {
         return Results.success(resumeApplicationService.matchResumes(
                 currentUser.getUserId(),
                 requestParam.getJobDescription(),
-                requestParam.getLimit() == null ? 3 : requestParam.getLimit()
+                requestParam.getResumeIds(),
+                requestParam.getLimit() == null ? 3 : requestParam.getLimit(),
+                requestParam.getRagEnabled()
         ));
+    }
+
+    @GetMapping("/jobs/match-history")
+    public Result<java.util.List<JobMatchHistoryItem>> listMatchHistory(@CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.listMatchHistory(currentUser.getUserId()));
     }
 
     @GetMapping("/jobs/match-tasks/{taskId}")
@@ -177,7 +185,7 @@ public class ResumeCareerController {
             @PathVariable Long resumeId,
             @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
             @CurrentUser UserContext currentUser) {
-        return Results.success(resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription()));
+        return Results.success(resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription(), requestParam.getRagEnabled()));
     }
 
     @PostMapping(value = "/resumes/{resumeId}/optimize/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -198,6 +206,7 @@ public class ResumeCareerController {
                         currentUser.getUserId(),
                         resumeId,
                         requestParam.getJobDescription(),
+                        requestParam.getRagEnabled(),
                         review -> {
                             try {
                                 sendEvent(emitter, "ITERATION", iterationEventData(review));

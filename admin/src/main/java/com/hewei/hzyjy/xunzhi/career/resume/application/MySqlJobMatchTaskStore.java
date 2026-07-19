@@ -1,6 +1,7 @@
 package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.hewei.hzyjy.xunzhi.career.resume.dao.entity.CareerJobMatchTaskDO;
 import com.hewei.hzyjy.xunzhi.career.resume.dao.mapper.CareerJobMatchTaskMapper;
@@ -40,7 +41,7 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
             row.setStatus(task.status());
             row.setJobDescription(jobDescription);
             row.setLimitCount(limit);
-            row.setMatchedTemplatesJson(JSON.toJSONString(task.matchedTemplates()));
+            row.setMatchedTemplatesJson(JSON.toJSONString(new JobMatchPayload(task.selectedResumeIds(), task.matchedResumes(), task.matchedTemplates())));
             row.setErrorMessage(errorMessage);
             row.setUpdateTime(new Date());
             row.setDelFlag(0);
@@ -103,14 +104,63 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
         return fallbackStore.findByTaskIdAndUserId(taskId, userId);
     }
 
+    @Override
+    public List<JobMatchHistoryItem> findRecentByUserId(Long userId, int limit) {
+        if (userId == null) {
+            return List.of();
+        }
+        CareerJobMatchTaskMapper mapper = mapperProvider.getIfAvailable();
+        if (mapper == null) {
+            return fallbackStore.findRecentByUserId(userId, limit);
+        }
+        try {
+            return mapper.selectList(Wrappers.<CareerJobMatchTaskDO>lambdaQuery()
+                            .eq(CareerJobMatchTaskDO::getUserId, userId)
+                            .eq(CareerJobMatchTaskDO::getDelFlag, 0)
+                            .orderByDesc(CareerJobMatchTaskDO::getCreateTime)
+                            .last("limit " + Math.min(Math.max(limit, 1), 20)))
+                    .stream()
+                    .map(row -> {
+                        JobMatchTaskResult task = fromRow(row);
+                        return new JobMatchHistoryItem(task.taskId(), task.status(), row.getJobDescription(),
+                                task.selectedResumeIds().size(), task.matchedResumes(), task.errorMessage(),
+                                row.getCreateTime() == null ? null : row.getCreateTime().toInstant());
+                    })
+                    .toList();
+        } catch (Exception ex) {
+            log.warn("MySQL job match history lookup failed, using in-memory fallback. userId={}", userId, ex);
+            return fallbackStore.findRecentByUserId(userId, limit);
+        }
+    }
+
     private JobMatchTaskResult fromRow(CareerJobMatchTaskDO row) {
-        List<String> templates = JSON.parseArray(row.getMatchedTemplatesJson(), String.class);
+        String json = row.getMatchedTemplatesJson();
+        if (json == null || json.isBlank()) {
+            return new JobMatchTaskResult(row.getTaskId(), row.getUserId(), row.getStatus(), List.of(), List.of(), List.of(), row.getErrorMessage());
+        }
+        if (json.trim().startsWith("[")) {
+            List<String> templates = JSON.parseArray(json, String.class);
+            return new JobMatchTaskResult(row.getTaskId(), row.getUserId(), row.getStatus(),
+                    templates == null ? List.of() : templates, List.of(), List.of(), row.getErrorMessage());
+        }
+        JSONObject payload = JSON.parseObject(json);
+        List<Long> selectedResumeIds = payload.getList("selectedResumeIds", Long.class);
+        List<JobMatchCandidate> candidates = payload.getList("matchedResumes", JobMatchCandidate.class);
+        List<String> templates = payload.getList("matchedTemplates", String.class);
         return new JobMatchTaskResult(
                 row.getTaskId(),
                 row.getUserId(),
                 row.getStatus(),
                 templates == null ? List.of() : templates,
+                selectedResumeIds == null ? List.of() : selectedResumeIds,
+                candidates == null ? List.of() : candidates,
                 row.getErrorMessage()
         );
     }
+
+    private record JobMatchPayload(
+            List<Long> selectedResumeIds,
+            List<JobMatchCandidate> matchedResumes,
+            List<String> matchedTemplates
+    ) { }
 }

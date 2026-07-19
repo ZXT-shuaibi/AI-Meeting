@@ -120,3 +120,5 @@
 - 评分精确到小数点后两位
 - 反馈内容具体详实，避免泛泛而谈
 - 语言专业客观，保持建设性语调
+- 只返回 JSON 对象，必须包含 `score`、`feedback`、`summary`、`strengths`、`weaknesses`、`suggestions`。
+- `summary` 为总评字符串；`strengths`、`weaknesses`、`suggestions` 均为简洁字符串数组。

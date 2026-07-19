@@ -57,7 +57,8 @@ class InterviewRecordFinalizeConcurrencyTest {
                 questionService,
                 finalizeLockService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(InterviewReportAiReviewer.class)
         );
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
 

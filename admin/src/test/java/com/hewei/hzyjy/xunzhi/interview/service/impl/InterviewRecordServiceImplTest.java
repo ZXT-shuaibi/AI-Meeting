@@ -8,6 +8,7 @@ import com.hewei.hzyjy.xunzhi.interview.dao.entity.InterviewRecordDO;
 import com.hewei.hzyjy.xunzhi.interview.dao.entity.InterviewSession;
 import com.hewei.hzyjy.xunzhi.interview.dao.mapper.InterviewRecordMapper;
 import com.hewei.hzyjy.xunzhi.interview.flow.report.InterviewRecordServiceImpl;
+import com.hewei.hzyjy.xunzhi.interview.flow.report.InterviewReportAiReviewer;
 import com.hewei.hzyjy.xunzhi.interview.service.InterviewQuestionCacheService;
 import com.hewei.hzyjy.xunzhi.interview.service.InterviewQuestionService;
 import com.hewei.hzyjy.xunzhi.interview.service.InterviewSessionService;
@@ -50,7 +51,8 @@ class InterviewRecordServiceImplTest {
                 questionService,
                 finalizeLockService,
                 runtimeSnapshotService,
-                runtimeRehydrateService
+                runtimeRehydrateService,
+                mock(InterviewReportAiReviewer.class)
         );
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
 

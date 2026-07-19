@@ -73,3 +73,4 @@ description: 基于职位描述、参考模板和四维评分体系审核简历�
 - 必须兼容 `CvReview` 结构。
 - `score` 取值范围为 `0.0-1.0`，并尽量精确到两位小数。
 - `feedback` 必须包含评分依据、结构化优缺点和可执行建议，避免泛泛而谈。
+- 必须额外提供 `summary`（总评字符串）、`strengths`、`weaknesses`、`suggestions`（均为字符串数组），以供界面分别展示。
