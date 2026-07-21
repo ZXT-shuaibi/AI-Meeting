@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentMap;
 public class InMemoryResumeParseTaskStore implements ResumeParseTaskStore {
 
     private final ConcurrentMap<String, ResumeParseTaskRecord> tasks = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, Long> displayOrders = new ConcurrentHashMap<>();
 
     @Override
     public ResumeParseTaskRecord save(ResumeParseTaskRecord task) {
@@ -36,8 +37,20 @@ public class InMemoryResumeParseTaskStore implements ResumeParseTaskStore {
         return tasks.values().stream()
                 .filter(task -> userId != null && userId.equals(task.userId()))
                 .filter(task -> status == null || status.isBlank() || task.status().name().equalsIgnoreCase(status))
-                .sorted(Comparator.comparing(ResumeParseTaskRecord::createTime).reversed())
+                .sorted(Comparator.comparing((ResumeParseTaskRecord task) -> displayOrders.getOrDefault(task.resumeId(), Long.MAX_VALUE))
+                        .thenComparing(ResumeParseTaskRecord::createTime, Comparator.reverseOrder()))
                 .toList();
+    }
+
+    @Override
+    public void updateDisplayOrder(Long userId, List<Long> resumeIds) {
+        if (userId == null || resumeIds == null) return;
+        for (int index = 0; index < resumeIds.size(); index++) {
+            Long resumeId = resumeIds.get(index);
+            if (resumeId != null && tasks.values().stream().anyMatch(task -> userId.equals(task.userId()) && resumeId.equals(task.resumeId()))) {
+                displayOrders.put(resumeId, (long) index);
+            }
+        }
     }
 
     @Override

@@ -24,7 +24,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Global exception handling for REST controllers.
+ * REST 接口的统一异常处理器。
+ *
+ * <p>负责将参数、校验、业务和未知系统异常转换为统一响应；日志只记录请求元数据与异常摘要，
+ * 不记录请求正文，避免简历、岗位描述等业务内容被写入日志。</p>
  */
 @Component("globalExceptionHandlerByAdmin")
 @Slf4j
@@ -37,7 +40,7 @@ public class GlobalExceptionHandler {
                 ? methodArgumentNotValidException.getBindingResult()
                 : ((BindException) ex).getBindingResult();
         String exceptionStr = extractBindingMessage(bindingResult);
-        log.error("[{}] {} [ex] {}", request.getMethod(), getUrl(request), exceptionStr);
+        log.error("[请求方法={}] [请求地址={}] [业务异常={}]", request.getMethod(), getUrl(request), exceptionStr);
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), exceptionStr);
     }
 
@@ -47,36 +50,40 @@ public class GlobalExceptionHandler {
                 .findFirst()
                 .map(item -> item.getMessage())
                 .orElse(StrUtil.EMPTY);
-        log.error("[{}] {} [ex] {}", request.getMethod(), getUrl(request), exceptionStr);
+        log.error("[请求方法={}] [请求地址={}] [校验异常={}]", request.getMethod(), getUrl(request), exceptionStr);
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), exceptionStr);
     }
 
     @ExceptionHandler(value = HttpMessageNotReadableException.class)
     public Result httpMessageNotReadableExceptionHandler(HttpServletRequest request, HttpMessageNotReadableException ex) {
         String exceptionStr = "请求体不能为空或格式错误";
-        log.error("[{}] {} [ex] {}", request.getMethod(), getUrl(request), exceptionStr);
+        Throwable rootCause = ex.getMostSpecificCause();
+        String rootMessage = rootCause == null ? ex.getMessage() : rootCause.getMessage();
+        // 不记录请求正文，避免在日志中泄露 JD 或简历内容。
+        log.warn("请求体解析失败 method={} uri={} contentType={} contentLength={} 原因={}",
+                request.getMethod(), getUrl(request), request.getContentType(), request.getContentLengthLong(), rootMessage);
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), exceptionStr);
     }
 
     @ExceptionHandler(value = IllegalArgumentException.class)
     public Result illegalArgumentExceptionHandler(HttpServletRequest request, IllegalArgumentException ex) {
-        log.error("[{}] {} [ex] {}", request.getMethod(), getUrl(request), ex.getMessage());
+        log.error("[请求方法={}] [请求地址={}] [参数异常={}]", request.getMethod(), getUrl(request), ex.getMessage());
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), ex.getMessage());
     }
 
     @ExceptionHandler(value = {AbstractException.class})
     public Result abstractException(HttpServletRequest request, AbstractException ex) {
         if (ex.getCause() != null) {
-            log.error("[{}] {} [ex] {}", request.getMethod(), request.getRequestURL().toString(), ex.toString(), ex.getCause());
+            log.error("[请求方法={}] [请求地址={}] [业务异常={}]", request.getMethod(), request.getRequestURL().toString(), ex.toString(), ex.getCause());
             return Results.failure(ex);
         }
-        log.error("[{}] {} [ex] {}", request.getMethod(), request.getRequestURL().toString(), ex.toString());
+        log.error("[请求方法={}] [请求地址={}] [业务异常={}]", request.getMethod(), request.getRequestURL().toString(), ex.toString());
         return Results.failure(ex);
     }
 
     @ExceptionHandler(value = Throwable.class)
     public Result defaultErrorHandler(HttpServletRequest request, Throwable throwable) {
-        log.error("[{}] {} ", request.getMethod(), getUrl(request), throwable);
+        log.error("[请求方法={}] [请求地址={}] [系统异常]", request.getMethod(), getUrl(request), throwable);
         if (Objects.equals(throwable.getClass().getSuperclass().getSimpleName(), AbstractException.class.getSimpleName())) {
             String errorCode = ReflectUtil.getFieldValue(throwable, "errorCode").toString();
             String errorMessage = ReflectUtil.getFieldValue(throwable, "errorMessage").toString();

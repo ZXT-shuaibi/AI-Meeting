@@ -94,7 +94,7 @@ public class XingChenAIClient {
         requestBody.put("parameters", buildParameters(input, fileUrl, extraParameters));
 
         String payload = requestBody.toJSONString();
-        log.debug("Dispatching XingChen chat request, chatId={}, stream={}, hasFile={}, extraParameterCount={}",
+        log.debug("正在发送星辰工作流请求，chatId={}，是否流式={}，是否携带文件={}，扩展参数数量={}",
                 chatId,
                 stream,
                 fileUrl != null && !fileUrl.trim().isEmpty(),
@@ -105,7 +105,7 @@ public class XingChenAIClient {
         }
 
         int responseCode = conn.getResponseCode();
-        log.info("XingChen chat response code={}", responseCode);
+        log.info("星辰工作流响应状态码={}", responseCode);
         if (responseCode != HttpsURLConnection.HTTP_OK) {
             throw new IOException("XingChen chat request failed, status=" + responseCode
                     + ", body=" + readResponseBody(conn, true));
@@ -165,15 +165,15 @@ public class XingChenAIClient {
         }
 
         int responseCode = conn.getResponseCode();
-        log.info("XingChen upload response code={}", responseCode);
+        log.info("星辰文件上传响应状态码={}", responseCode);
         if (responseCode == HttpsURLConnection.HTTP_OK) {
             String responseBody = readResponseBody(conn, false);
-            log.info("XingChen upload response={}", responseBody);
+            log.info("星辰文件上传响应={}", responseBody);
             return parseFileUrlFromResponse(responseBody);
         }
 
         String errorBody = readResponseBody(conn, true);
-        log.error("XingChen upload failed: {}", errorBody);
+        log.error("星辰文件上传失败：{}", errorBody);
         throw new RuntimeException("File upload failed: " + errorBody);
     }
 
@@ -183,9 +183,9 @@ public class XingChenAIClient {
             if (historyObj instanceof List<?>) {
                 return historyObj;
             }
-            log.warn("history payload is not a JSON array, fallback to empty list");
+            log.warn("历史消息载荷不是 JSON 数组，已回退为空列表");
         } catch (Exception ex) {
-            log.warn("Failed to parse history payload, fallback to empty list: {}", ex.getMessage());
+            log.warn("解析历史消息载荷失败，已回退为空列表：{}", ex.getMessage());
         }
         return new ArrayList<>();
     }
@@ -223,12 +223,12 @@ public class XingChenAIClient {
 
                 String processedLine = extractSsePayload(line);
                 if (processedLine == null) {
-                    log.debug("Skipped non-payload SSE line, chatId={}", chatId);
+                log.debug("已跳过非载荷 SSE 数据行，chatId={}", chatId);
                     continue;
                 }
 
                 callback.accept(processedLine);
-                log.debug("Received XingChen SSE chunk, chatId={}, payloadLength={}",
+                log.debug("已接收星辰 SSE 响应分片，chatId={}，载荷长度={}",
                         chatId, processedLine.length());
                 outputStream.write(processedLine.getBytes(StandardCharsets.UTF_8));
                 outputStream.flush();
@@ -308,10 +308,10 @@ public class XingChenAIClient {
                 throw new RuntimeException("Upload response missing url field: " + responseBody);
             }
 
-            log.info("Parsed XingChen file URL={}", url);
+            log.info("已解析星辰文件地址={}", url);
             return url;
         } catch (Exception ex) {
-            log.error("Failed to parse XingChen file URL, response={}", responseBody, ex);
+            log.error("解析星辰文件地址失败，响应内容={}", responseBody, ex);
             throw new RuntimeException("Failed to parse file URL: " + ex.getMessage());
         }
     }

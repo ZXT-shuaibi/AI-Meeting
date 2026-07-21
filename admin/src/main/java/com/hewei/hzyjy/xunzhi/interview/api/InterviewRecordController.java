@@ -3,6 +3,7 @@ package com.hewei.hzyjy.xunzhi.interview.api;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hewei.hzyjy.xunzhi.common.convention.annotation.CurrentUser;
 import com.hewei.hzyjy.xunzhi.common.convention.context.UserContext;
+import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Result;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Results;
 import com.hewei.hzyjy.xunzhi.interview.api.io.req.InterviewRecordPageReqDTO;
@@ -51,7 +52,14 @@ public class InterviewRecordController {
     public Result<Void> saveInterviewRecordFromRedis(
             @PathVariable String sessionId,
             @CurrentUser UserContext currentUser) {
-        interviewRecordService.saveInterviewRecordFromRedis(sessionId, currentUser.getUserId());
+        try {
+            interviewRecordService.saveInterviewRecordFromRedis(sessionId, currentUser.getUserId());
+        } catch (ClientException ex) {
+        // 结束归档操作具备幂等性：若已有写入者处理同一会话，前端稍后重试即可获得同一结果。
+            if (ex.getMessage() == null || !ex.getMessage().contains("finalize is processing")) {
+                throw ex;
+            }
+        }
         return Results.success();
     }
 }

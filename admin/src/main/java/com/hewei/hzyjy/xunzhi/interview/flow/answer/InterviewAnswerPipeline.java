@@ -93,12 +93,12 @@ public class InterviewAnswerPipeline {
             return finishAndReturn(ctx, true);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            log.warn("Interrupted while executing interview answer pipeline, sessionId: {}", sessionId);
+            log.warn("执行面试回答流水线时被中断，面试会话编号={}", sessionId);
             recordAnswerPipelineFailure("interrupted");
             ctx.response.fail("interview answer request interrupted");
             return ctx.response;
         } catch (Exception ex) {
-            log.error("Failed to execute interview answer pipeline, sessionId: {}", sessionId, ex);
+            log.error("执行面试回答流水线失败，面试会话编号={}", sessionId, ex);
             recordAnswerPipelineFailure("unexpected_exception");
             return ctx.response.fail("failed to process answer: " + ex.getMessage());
         } finally {
@@ -343,7 +343,7 @@ public class InterviewAnswerPipeline {
                 : Boolean.TRUE.equals(ctx.followUpNeeded);
 
         log.info(
-                "Follow-up rule decision, sessionId={}, requestId={}, questionNumber={}, chainId={}, reasonCode={}, reasonText={}, ruleVersion={}, needFollowUp={}, resolvedMaxFollowUp={}, fallback={}",
+                "追问规则决策结果，sessionId={}，requestId={}，题号={}，链路ID={}，原因码={}，原因说明={}，规则版本={}，是否需要追问={}，最大追问次数={}，是否使用兜底={}",
                 ctx.sessionId,
                 ctx.requestId,
                 ctx.currentQuestionNumber,
@@ -432,7 +432,7 @@ public class InterviewAnswerPipeline {
             ctx.response.setTotalScore(committedTotalScore);
             return true;
         } catch (Exception ex) {
-            log.error("Failed to commit interview score, sessionId={}, requestId={}", ctx.sessionId, ctx.requestId, ex);
+            log.error("提交面试评分失败，面试会话编号={}，请求编号={}", ctx.sessionId, ctx.requestId, ex);
             recordAnswerPipelineFailure("score_commit_failed");
             ctx.response.fail("failed to commit interview score");
             return false;
@@ -450,10 +450,10 @@ public class InterviewAnswerPipeline {
             // 分数提交失败时，恢复到推进前状态，保证客户端重试仍能命中当前题。
             interviewQuestionCacheService.restoreInterviewFlow(ctx.sessionId, flowSnapshotBeforeAdvance);
             Metrics.counter("answer_flow_rollback_total", "branch", StrUtil.blankToDefault(branch, "unknown")).increment();
-            log.warn("Rolled back interview flow after score commit failure, sessionId={}, requestId={}, branch={}",
+            log.warn("评分提交失败后已回滚面试流程，面试会话编号={}，请求编号={}，分支={}",
                     ctx.sessionId, ctx.requestId, branch);
         } catch (Exception ex) {
-            log.error("Failed to rollback interview flow after score commit failure, sessionId={}, requestId={}, branch={}",
+            log.error("评分提交失败后回滚面试流程失败，面试会话编号={}，请求编号={}，分支={}",
                     ctx.sessionId, ctx.requestId, branch, ex);
         }
     }
@@ -513,7 +513,7 @@ public class InterviewAnswerPipeline {
             ctx.turnLog = turn;
             return interviewQuestionCacheService.appendInterviewTurnIfAbsent(ctx.sessionId, turn);
         } catch (Exception ex) {
-            log.warn("Failed to append interview turn, sessionId: {}", ctx.sessionId, ex);
+            log.warn("追加面试轮次记录失败，面试会话编号={}", ctx.sessionId, ex);
             return false;
         }
     }

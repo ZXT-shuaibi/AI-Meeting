@@ -183,7 +183,7 @@ public class ResumeApplicationService {
                     "matched=" + candidates.size(), true, start, null, Map.of("userId", userId, "resumeScope", resumeIds.size()));
             return jobMatchTaskStore.save(completed, jobDescription, boundedLimit, null);
         } catch (Exception ex) {
-            log.warn("Career job match task failed. taskId={}", taskId, ex);
+            log.warn("岗位匹配任务执行失败。任务编号={}", taskId, ex);
             JobMatchTaskResult failed = JobMatchTaskResult.failed(taskId, userId, selectedResumeIds, ex.getMessage());
             publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
                     "FAILED", false, start, ex.getMessage(), Map.of("userId", userId));
@@ -195,8 +195,11 @@ public class ResumeApplicationService {
         return jobMatchTaskStore.findByTaskIdAndUserId(taskId, userId).orElseGet(() -> JobMatchTaskResult.notFound(taskId));
     }
 
-    public List<JobMatchHistoryItem> listMatchHistory(Long userId) {
-        return jobMatchTaskStore.findRecentByUserId(userId, 20);
+    public JobMatchHistoryPage listMatchHistory(Long userId, int limit) {
+        int normalizedLimit = limit < 0 ? 20 : limit;
+        return new JobMatchHistoryPage(
+                jobMatchTaskStore.findRecentByUserId(userId, normalizedLimit),
+                jobMatchTaskStore.countByUserId(userId));
     }
 
     public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription) {
@@ -211,11 +214,11 @@ public class ResumeApplicationService {
         return optimize(userId, resumeId, jobDescription, progressCallback, null);
     }
 
-    public CvOptimizationResult optimize(Long userId, Long resumeId, String jobDescription, Boolean ragOverride) {
+    public CvOptimizationResult optimizeWithRagOverride(Long userId, Long resumeId, String jobDescription, Boolean ragOverride) {
         return optimize(userId, resumeId, jobDescription, null, ragOverride);
     }
 
-    public CvOptimizationResult optimize(
+    public CvOptimizationResult optimizeWithRagOverride(
             Long userId, Long resumeId, String jobDescription, Boolean ragOverride, Consumer<CvReview> progressCallback) {
         return optimize(userId, resumeId, jobDescription, progressCallback, ragOverride);
     }
@@ -288,10 +291,22 @@ public class ResumeApplicationService {
     public List<ResumeOptimizationHistoryResult> listOptimizationHistory(Long userId) {
         return resumeParseTaskStore.findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name()).stream()
                 .filter(task -> task.optimizationResultJson() != null && !task.optimizationResultJson().isBlank())
+                .map(task -> toOptimizationHistoryResult(task))
+                .filter(java.util.Objects::nonNull)
+                .sorted(java.util.Comparator.comparing(ResumeOptimizationHistoryResult::optimizedAt,
+                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
                 .limit(20)
-                .map(task -> new ResumeOptimizationHistoryResult(task.taskId(), task.resumeId(), task.originalFilename(),
-                        task.jobDescription(), JSON.parseObject(task.optimizationResultJson(), CvOptimizationResult.class), task.optimizedAt()))
                 .toList();
+    }
+
+    private ResumeOptimizationHistoryResult toOptimizationHistoryResult(ResumeParseTaskRecord task) {
+        try {
+            return new ResumeOptimizationHistoryResult(task.taskId(), task.resumeId(), task.originalFilename(),
+                    task.jobDescription(), JSON.parseObject(task.optimizationResultJson()), task.optimizedAt());
+        } catch (Exception ex) {
+            log.warn("已跳过格式异常的简历优化历史记录。任务编号={}，用户编号={}", task.taskId(), task.userId(), ex);
+            return null;
+        }
     }
 
     public InterviewPlan planInterview(Long userId, String sessionId, Long resumeId, String jobDescription) {
@@ -332,6 +347,8 @@ public class ResumeApplicationService {
         byte[] snapshot = readFileSnapshot(file);
         ResumeParseTaskRecord duplicate = findDuplicateUpload(userId, sha256(snapshot));
         if (duplicate != null) {
+            log.info("简历上传复用了已有解析任务，任务编号={}，任务状态={}，用户编号={}",
+                    duplicate.taskId(), duplicate.status(), userId);
             return toParseTaskResult(duplicate);
         }
         ResumeObjectStorageResult storage = storeAsyncUpload(taskId, file, snapshot);
@@ -357,6 +374,8 @@ public class ResumeApplicationService {
                 now
         );
         resumeParseTaskStore.save(task);
+        log.info("简历上传已受理，进入异步解析队列。任务编号={}，用户编号={}，文件名={}，文件大小字节={}",
+                taskId, userId, task.originalFilename(), task.fileSize());
         careerTaskExecutor.execute(() -> processParseTask(taskId));
         return toParseTaskResult(task);
     }
@@ -375,6 +394,19 @@ public class ResumeApplicationService {
         return tasks.stream()
                 .map(this::toParseTaskResult)
                 .toList();
+    }
+
+    public void updateMatchResumeOrder(Long userId, List<Long> resumeIds) {
+        if (resumeIds == null || resumeIds.isEmpty() || new LinkedHashSet<>(resumeIds).size() != resumeIds.size()) {
+            throw new IllegalArgumentException("简历排序必须包含唯一的简历编号");
+        }
+        List<ResumeParseTaskRecord> completed = resumeParseTaskStore.findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name());
+        Set<Long> ownedResumeIds = completed.stream().map(ResumeParseTaskRecord::resumeId)
+                .filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        if (!ownedResumeIds.containsAll(resumeIds)) {
+            throw new IllegalArgumentException("简历排序中包含不可用或不属于当前用户的简历");
+        }
+        resumeParseTaskStore.updateDisplayOrder(userId, resumeIds);
     }
 
     public ResumeParseTaskResult cancelParseTask(Long userId, String taskId) {
@@ -495,7 +527,7 @@ public class ResumeApplicationService {
             ResumeParseTaskRecord failed = (latest == null ? task : latest).failed(ex.getMessage());
             resumeParseTaskStore.save(failed);
             publishParseMetric(task, task.resumeId(), parseStart, false, ex.getMessage());
-            log.warn("Resume parse task failed, taskId={}, userId={}", taskId, task.userId(), ex);
+            log.warn("简历解析任务失败。任务编号={}，用户编号={}", taskId, task.userId(), ex);
         }
     }
 
@@ -515,28 +547,35 @@ public class ResumeApplicationService {
                         "简历编号", String.valueOf(resumeId), "文件大小字节", task.fileSize() == null ? 0L : task.fileSize(), "解析耗时毫秒", durationMs));
     }
 
-    /** Finds an exact-content duplicate for one user without using filename as a proxy. */
+    /**
+     * 在同一用户范围内按文件内容哈希查找重复上传，而非按文件名判断。
+     *
+     * <p>用户可重命名同一份 PDF，因此只有内容哈希一致才视为重复；已失败或主动取消的任务
+     * 不会阻塞用户重新上传。</p>
+     */
     private ResumeParseTaskRecord findDuplicateUpload(Long userId, String fileHash) {
         if (!StringUtils.hasText(fileHash)) {
             return null;
         }
         return resumeParseTaskStore.findByUserId(userId, null).stream()
+                .filter(task -> task.status() != ResumeParseTaskStatus.FAILED
+                        && task.status() != ResumeParseTaskStatus.CANCELED)
                 .filter(task -> fileHash.equals(taskFileHash(task)))
                 .findFirst()
                 .orElse(null);
     }
 
-    /** Keeps one completed record per exact file; historical rows remain intact but are not listed. */
+    /**
+     * 仅在候选列表中隐藏内容完全相同的历史简历。
+     *
+     * <p>底层记录不会被删除，确保历史追溯与任务审计仍然完整；同时严格保留存储层已确定的
+     * 用户自定义展示顺序，避免去重导致拖拽排序在刷新后被重排。</p>
+     */
     private List<ResumeParseTaskRecord> hideDuplicateCompletedTasks(List<ResumeParseTaskRecord> tasks) {
         Map<String, ResumeParseTaskRecord> unique = new LinkedHashMap<>();
-        tasks.stream()
-                .sorted(java.util.Comparator.comparing(ResumeParseTaskRecord::createTime,
-                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
-                .forEach(task -> unique.putIfAbsent(taskFileHash(task), task));
-        return unique.values().stream()
-                .sorted(java.util.Comparator.comparing(ResumeParseTaskRecord::createTime,
-                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
-                .toList();
+        // 存储层已应用用户自定义展示顺序；去重只能移除重复文件，绝不能改变候选列表顺序。
+        tasks.forEach(task -> unique.putIfAbsent(taskFileHash(task), task));
+        return List.copyOf(unique.values());
     }
 
     private String taskFileHash(ResumeParseTaskRecord task) {
@@ -551,7 +590,7 @@ public class ResumeApplicationService {
             try (InputStream input = resumeObjectStorage.get(task.storageKey())) {
                 return input == null ? "task:" + task.taskId() : sha256(input.readAllBytes());
             } catch (Exception ex) {
-                log.debug("Unable to calculate resume duplicate hash. taskId={}", task.taskId(), ex);
+                log.debug("无法计算简历文件去重哈希。任务编号={}", task.taskId(), ex);
             }
         }
         return "task:" + task.taskId();
@@ -585,7 +624,7 @@ public class ResumeApplicationService {
                     "chunkCount=" + chunks.size(), true, start, null, Map.of("resumeId", cv.getId(), "userId", cv.getUserId()));
             return ResumeEmbeddingResult.completed(cv.getId(), chunks);
         } catch (Exception ex) {
-            log.warn("Resume embedding failed. resumeId={}", cv.getId(), ex);
+            log.warn("简历向量化失败。简历编号={}", cv.getId(), ex);
             publishTool(traceId, memoryId(cv.getId()), "RESUME_ANALYSIS", "resume-embedding", cv.getName(),
                     "FAILED", false, start, ex.getMessage(), Map.of("resumeId", cv.getId(), "userId", cv.getUserId()));
             if (failOnError) {
@@ -751,7 +790,7 @@ public class ResumeApplicationService {
         try {
             return resumeObjectStorage.put(objectStorageKey(taskId, safeFilename(file)), snapshot, file.getContentType(), safeFilename(file));
         } catch (Exception ex) {
-            log.warn("Resume object storage handoff failed, using local snapshot fallback. taskId={}", taskId, ex);
+            log.warn("简历对象存储转交失败，已使用本地快照兜底。任务编号={}", taskId, ex);
             return null;
         }
     }
@@ -832,7 +871,7 @@ public class ResumeApplicationService {
             }
         } finally {
             if (!tempFile.delete()) {
-                log.debug("Temporary DOCX file cleanup deferred. path={}", tempFile.getAbsolutePath());
+                log.debug("临时 DOCX 文件暂未清理，将由系统后续回收。路径={}", tempFile.getAbsolutePath());
             }
         }
     }

@@ -49,7 +49,7 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
                 mapper.updateById(row);
             }
         } catch (Exception ex) {
-            log.warn("MySQL resume parse task persistence failed, in-memory fallback remains available. taskId={}", task.taskId(), ex);
+            log.warn("MySQL 简历解析任务持久化失败，内存兜底仍可用。任务编号={}", task.taskId(), ex);
         }
         return task;
     }
@@ -69,7 +69,7 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
                     return Optional.of(task);
                 }
             } catch (Exception ex) {
-                log.warn("MySQL resume parse task lookup failed, using in-memory fallback. taskId={}", taskId, ex);
+            log.warn("MySQL 简历解析任务查询失败，已使用内存兜底。任务编号={}", taskId, ex);
             }
         }
         return fallbackStore.findByTaskId(taskId);
@@ -95,7 +95,7 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
                 }
                 return Optional.empty();
             } catch (Exception ex) {
-                log.warn("MySQL resume parse task owner lookup failed, using in-memory fallback. taskId={}, userId={}", taskId, userId, ex);
+            log.warn("MySQL 简历解析任务归属查询失败，已使用内存兜底。任务编号={}，用户编号={}", taskId, userId, ex);
             }
         }
         return fallbackStore.findByTaskIdAndUserId(taskId, userId);
@@ -112,17 +112,36 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
                 if (status != null && !status.isBlank()) {
                     query.eq(CareerResumeParseTaskDO::getStatus, status.toUpperCase());
                 }
-                List<ResumeParseTaskRecord> tasks = mapper.selectList(query.orderByDesc(CareerResumeParseTaskDO::getCreateTime))
+                List<ResumeParseTaskRecord> tasks = mapper.selectList(query)
                         .stream()
+                        .sorted(java.util.Comparator.comparing(CareerResumeParseTaskDO::getDisplayOrder,
+                                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
+                                .thenComparing(CareerResumeParseTaskDO::getCreateTime,
+                                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
                         .map(this::fromRow)
                         .toList();
                 tasks.forEach(fallbackStore::save);
                 return tasks;
             } catch (Exception ex) {
-                log.warn("MySQL resume parse task list failed, using in-memory fallback. userId={}", userId, ex);
+            log.warn("MySQL 简历解析任务列表查询失败，已使用内存兜底。用户编号={}", userId, ex);
             }
         }
         return fallbackStore.findByUserId(userId, status);
+    }
+
+    @Override
+    public void updateDisplayOrder(Long userId, List<Long> resumeIds) {
+        CareerResumeParseTaskMapper mapper = mapperProvider.getIfAvailable();
+        if (mapper == null || userId == null || resumeIds == null) return;
+        for (int index = 0; index < resumeIds.size(); index++) {
+            Long resumeId = resumeIds.get(index);
+            if (resumeId == null) continue;
+            mapper.update(null, Wrappers.<CareerResumeParseTaskDO>lambdaUpdate()
+                    .eq(CareerResumeParseTaskDO::getUserId, userId)
+                    .eq(CareerResumeParseTaskDO::getResumeId, resumeId)
+                    .set(CareerResumeParseTaskDO::getDisplayOrder, index));
+        }
+        fallbackStore.updateDisplayOrder(userId, resumeIds);
     }
 
     @Override
@@ -145,7 +164,7 @@ public class MySqlResumeParseTaskStore implements ResumeParseTaskStore {
                 tasks.forEach(fallbackStore::save);
                 return tasks;
             } catch (Exception ex) {
-                log.warn("MySQL stale resume parse task lookup failed, using in-memory fallback.", ex);
+            log.warn("MySQL 超时简历解析任务查询失败，已使用内存兜底。", ex);
             }
         }
         return fallbackStore.findStaleActiveTasks(updatedBefore, limit);

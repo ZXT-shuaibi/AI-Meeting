@@ -8,6 +8,7 @@ import com.hewei.hzyjy.xunzhi.career.api.io.InterviewPlanReqDTO;
 import com.hewei.hzyjy.xunzhi.career.api.io.InterviewReflectReqDTO;
 import com.hewei.hzyjy.xunzhi.career.api.io.JobMatchReqDTO;
 import com.hewei.hzyjy.xunzhi.career.api.io.ResumeOptimizeReqDTO;
+import com.hewei.hzyjy.xunzhi.career.api.io.ResumeMatchOrderReqDTO;
 import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchHistoryItem;
 import com.hewei.hzyjy.xunzhi.career.resume.application.ResumeApplicationService;
@@ -35,6 +36,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -93,6 +95,14 @@ public class ResumeCareerController {
             @RequestParam(value = "status", required = false) String status,
             @CurrentUser UserContext currentUser) {
         return Results.success(resumeApplicationService.listParseTasks(currentUser.getUserId(), status));
+    }
+
+    @PutMapping("/resumes/match-order")
+    public Result<Void> updateMatchResumeOrder(
+            @Valid @RequestBody ResumeMatchOrderReqDTO requestParam,
+            @CurrentUser UserContext currentUser) {
+        resumeApplicationService.updateMatchResumeOrder(currentUser.getUserId(), requestParam.getResumeIds());
+        return Results.success();
     }
 
     @GetMapping("/resumes/optimization-history")
@@ -169,8 +179,10 @@ public class ResumeCareerController {
     }
 
     @GetMapping("/jobs/match-history")
-    public Result<java.util.List<JobMatchHistoryItem>> listMatchHistory(@CurrentUser UserContext currentUser) {
-        return Results.success(resumeApplicationService.listMatchHistory(currentUser.getUserId()));
+    public Result<com.hewei.hzyjy.xunzhi.career.resume.application.JobMatchHistoryPage> listMatchHistory(
+            @RequestParam(value = "limit", defaultValue = "20") int limit,
+            @CurrentUser UserContext currentUser) {
+        return Results.success(resumeApplicationService.listMatchHistory(currentUser.getUserId(), limit));
     }
 
     @GetMapping("/jobs/match-tasks/{taskId}")
@@ -185,7 +197,7 @@ public class ResumeCareerController {
             @PathVariable Long resumeId,
             @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
             @CurrentUser UserContext currentUser) {
-        return Results.success(resumeApplicationService.optimize(currentUser.getUserId(), resumeId, requestParam.getJobDescription(), requestParam.getRagEnabled()));
+        return Results.success(resumeApplicationService.optimizeWithRagOverride(currentUser.getUserId(), resumeId, requestParam.getJobDescription(), requestParam.getRagEnabled()));
     }
 
     @PostMapping(value = "/resumes/{resumeId}/optimize/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -193,16 +205,16 @@ public class ResumeCareerController {
             @PathVariable Long resumeId,
             @Valid @RequestBody ResumeOptimizeReqDTO requestParam,
             @CurrentUser UserContext currentUser) throws IOException {
-        // One optimization can include several provider calls, so the stream must outlive a single model timeout.
+        // 一次优化可能串行调用多个模型或工具，因此流式响应时长必须覆盖单次模型调用的默认超时。
         SseEmitter emitter = new SseEmitter(RESUME_OPTIMIZATION_STREAM_TIMEOUT_MILLIS);
-        emitter.onTimeout(() -> log.warn("Resume optimization stream timed out, userId={}, resumeId={}",
+        emitter.onTimeout(() -> log.warn("简历优化流式响应超时，用户编号={}，简历编号={}",
                 currentUser.getUserId(), resumeId));
-        emitter.onError(ex -> log.warn("Resume optimization stream transport failed, userId={}, resumeId={}",
+        emitter.onError(ex -> log.warn("简历优化流式响应传输失败，用户编号={}，简历编号={}",
                 currentUser.getUserId(), resumeId, ex));
-        sendEvent(emitter, "START", "resume optimization started");
+        sendEvent(emitter, "START", "简历优化已开始");
         careerTaskExecutor.execute(() -> {
             try {
-                CvOptimizationResult result = resumeApplicationService.optimize(
+                CvOptimizationResult result = resumeApplicationService.optimizeWithRagOverride(
                         currentUser.getUserId(),
                         resumeId,
                         requestParam.getJobDescription(),
@@ -214,20 +226,20 @@ public class ResumeCareerController {
                                 throw new IllegalStateException("Failed to stream optimization iteration", ex);
                             }
                         });
-                log.info("Resume optimization completed, streaming result, userId={}, resumeId={}",
+                log.info("简历优化已完成，正在发送流式结果，用户编号={}，简历编号={}",
                         currentUser.getUserId(), resumeId);
                 sendEvent(emitter, "COMPLETE", result);
             } catch (Exception ex) {
-                log.warn("Resume optimization failed, streaming error, userId={}, resumeId={}",
+                log.warn("简历优化失败，正在发送流式错误结果，用户编号={}，简历编号={}",
                         currentUser.getUserId(), resumeId, ex);
                 try {
-                    sendEvent(emitter, "ERROR", ex.getMessage() == null ? "resume optimization failed" : ex.getMessage());
+                    sendEvent(emitter, "ERROR", ex.getMessage() == null ? "简历优化失败" : ex.getMessage());
                 } catch (Exception sendError) {
-                    log.warn("Resume optimization error event could not be written, userId={}, resumeId={}",
+                log.warn("简历优化错误事件写入失败，用户编号={}，简历编号={}",
                             currentUser.getUserId(), resumeId, sendError);
                 }
             } finally {
-                // A disconnected client can make event writes fail; always release the SSE response.
+        // 客户端断连会导致事件写入失败；无论成功或失败都必须释放 SSE 响应资源。
                 emitter.complete();
             }
         });

@@ -8,11 +8,14 @@ import com.hewei.hzyjy.xunzhi.career.agent.support.AgentResponseParser;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
+import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContext;
+import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContextProvider;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewReviewFeedbackRespDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.RadarChartDTO;
 import com.hewei.hzyjy.xunzhi.interview.service.model.InterviewTurnLog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -28,6 +31,12 @@ public class InterviewReportAiReviewer {
     private static final int MAX_PROMPT_LENGTH = 14_000;
 
     private final AiGateway aiGateway;
+    private InterviewHistoryContextProvider interviewHistoryContextProvider;
+
+    @Autowired
+    void setInterviewHistoryContextProvider(InterviewHistoryContextProvider interviewHistoryContextProvider) {
+        this.interviewHistoryContextProvider = interviewHistoryContextProvider;
+    }
 
     public InterviewReviewFeedbackRespDTO review(
             String sessionId,
@@ -36,11 +45,14 @@ public class InterviewReportAiReviewer {
             RadarChartDTO radarChart,
             String interviewSuggestions) {
         try {
+            InterviewHistoryContext historyContext = interviewHistoryContextProvider == null
+                    ? InterviewHistoryContext.empty()
+                    : interviewHistoryContextProvider.load(sessionId);
             AiGatewayResult result = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("interview-report-review")
                     .sessionId(sessionId)
                     .systemPrompt("你是一名资深中文面试教练。根据提供的面试事实生成个性化复盘。只输出合法 JSON，禁止 Markdown 和额外说明。格式固定为：{\"overallComment\":\"不超过120字的中文总体评价\",\"highlights\":[\"中文亮点\"],\"improvementTips\":[\"中文待改进点\"],\"nextActions\":[\"中文下一步行动\"]}。每个数组最多3项；只能基于给定的分数、问题、回答和反馈，不得编造事实。")
-                    .userPrompt(buildPrompt(interviewDirection, turns, radarChart, interviewSuggestions))
+                    .userPrompt(buildPrompt(interviewDirection, turns, radarChart, interviewSuggestions, historyContext))
                     .build());
             if (result == null || result.degraded() || StrUtil.isBlank(result.content())) {
                 return null;
@@ -50,7 +62,7 @@ public class InterviewReportAiReviewer {
                     .filter(this::isValidChineseFeedback)
                     .orElse(null);
         } catch (Exception ex) {
-            log.warn("Failed to generate AI interview report, sessionId={}", sessionId, ex);
+            log.warn("生成 AI 面试报告失败，sessionId={}", sessionId, ex);
             return null;
         }
     }
@@ -67,6 +79,24 @@ public class InterviewReportAiReviewer {
         return payload.length() <= MAX_PROMPT_LENGTH
                 ? payload
                 : payload.substring(0, MAX_PROMPT_LENGTH);
+    }
+
+    private String buildPrompt(
+            String interviewDirection,
+            List<InterviewTurnLog> turns,
+            RadarChartDTO radarChart,
+            String interviewSuggestions,
+            InterviewHistoryContext historyContext) {
+        String historyText = historyContext == null ? "" : historyContext.toPromptText(2400);
+        if (StrUtil.isBlank(historyText)) {
+            return buildPrompt(interviewDirection, turns, radarChart, interviewSuggestions);
+        }
+        int baseLimit = Math.max(0, MAX_PROMPT_LENGTH - historyText.length() - 2);
+        String base = buildPrompt(interviewDirection, turns, radarChart, interviewSuggestions);
+        if (base.length() > baseLimit) {
+            base = base.substring(0, baseLimit);
+        }
+        return base + "\n\n" + historyText;
     }
 
     private InterviewReviewFeedbackRespDTO toFeedback(JSONObject response) {

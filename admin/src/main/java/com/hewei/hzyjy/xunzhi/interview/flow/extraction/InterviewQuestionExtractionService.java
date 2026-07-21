@@ -63,7 +63,7 @@ public class InterviewQuestionExtractionService {
             // 同一 session 的提取属于重操作，先拿会话级重锁，避免并发上传/提取造成重复消耗和状态覆盖。
             heavyLock = interviewAiSessionLockService.acquire(reqDTO.getSessionId(), InterviewAiGuardStage.INTERVIEW_EXTRACTION);
             if (heavyLock == null) {
-                response.setErrorMessage("AI_OVERLOADED: extraction is processing, please retry");
+            response.setErrorMessage("AI_OVERLOADED：题目解析正在处理中，请稍后重试");
                 return response;
             }
 
@@ -95,11 +95,11 @@ public class InterviewQuestionExtractionService {
             }
 
             response.setIsSuccess(1);
-            log.info("Interview question extraction completed, sessionId={}", reqDTO.getSessionId());
+        log.info("面试题目解析完成，sessionId={}", reqDTO.getSessionId());
             return response;
         } catch (InterviewAiGuardException e) {
             long responseTime = System.currentTimeMillis() - startTime;
-            log.warn("Interview question extraction guarded failure, sessionId={}, code={}, message={}",
+        log.warn("面试题目解析被调用保护拦截，sessionId={}，错误码={}，错误信息={}",
                     reqDTO.getSessionId(), e.getErrorCode(), e.getMessage());
             try {
                 // 失败也落库，但仅记录错误信息；结构化字段覆盖保护在 service 层统一处理。
@@ -110,14 +110,14 @@ public class InterviewQuestionExtractionService {
                         null
                 );
             } catch (Exception saveException) {
-                log.error("Failed to save extraction guard error record: {}", saveException.getMessage());
+        log.error("保存题目解析调用保护错误记录失败：{}", saveException.getMessage());
             }
             response.setErrorMessage(e.getMessage());
             response.setIsSuccess(0);
             return response;
         } catch (Exception e) {
             long responseTime = System.currentTimeMillis() - startTime;
-            log.error("Interview question extraction failed: {}", e.getMessage(), e);
+        log.error("面试题目解析失败：{}", e.getMessage(), e);
             try {
                 interviewQuestionService.createFromAIResponse(
                         reqDTO,
@@ -126,10 +126,10 @@ public class InterviewQuestionExtractionService {
                         null
                 );
             } catch (Exception saveException) {
-                log.error("Failed to save extraction error record: {}", saveException.getMessage());
+        log.error("保存题目解析失败记录失败：{}", saveException.getMessage());
             }
 
-            response.setErrorMessage("interview question extraction failed: " + e.getMessage());
+        response.setErrorMessage("面试题目解析失败：" + e.getMessage());
             response.setIsSuccess(0);
             return response;
         } finally {
@@ -142,7 +142,7 @@ public class InterviewQuestionExtractionService {
             AgentPropertiesDO agentProperties,
             InterviewQuestionRespDTO response) {
         if (reqDTO.getResumePdf() == null || reqDTO.getResumePdf().isEmpty()) {
-            response.setErrorMessage("resume file does not exist");
+        response.setErrorMessage("简历文件不存在");
             return null;
         }
         try {
@@ -151,11 +151,11 @@ public class InterviewQuestionExtractionService {
                     agentProperties.getApiKey(),
                     agentProperties.getApiSecret()
             );
-            log.info("Resume uploaded successfully, url={}", fileUrl);
+        log.info("简历文件上传成功，地址={}", fileUrl);
             return fileUrl;
         } catch (Exception e) {
-            log.error("Resume upload failed: {}", e.getMessage());
-            response.setErrorMessage("failed to upload resume file");
+        log.error("简历文件上传失败：{}", e.getMessage());
+        response.setErrorMessage("简历文件上传失败");
             return null;
         }
     }
@@ -168,9 +168,9 @@ public class InterviewQuestionExtractionService {
                     (int) responseTime,
                     null
             );
-            log.info("Interview question response saved, sessionId={}", reqDTO.getSessionId());
+        log.info("面试题目工作流响应已保存，sessionId={}", reqDTO.getSessionId());
         } catch (Exception e) {
-            log.error("Failed to save interview question response, sessionId={}, error={}",
+        log.error("保存面试题目工作流响应失败，sessionId={}，错误信息={}",
                     reqDTO.getSessionId(), e.getMessage());
         }
     }
@@ -180,7 +180,7 @@ public class InterviewQuestionExtractionService {
             InterviewQuestionRespDTO response,
             String fullContent) {
         try {
-            log.info("Start parsing interview question response, sessionId={}, payloadLength={}, payloadHash={}",
+        log.info("开始解析面试题目工作流响应，sessionId={}，响应长度={}，响应摘要={}",
                     reqDTO.getSessionId(),
                     fullContent == null ? 0 : fullContent.length(),
                     digestForLog(fullContent));
@@ -188,18 +188,18 @@ public class InterviewQuestionExtractionService {
             String workflowErrorMessage = interviewResponseParser.extractWorkflowErrorMessage(fullContent);
             if (StrUtil.isNotBlank(workflowErrorMessage)) {
                 response.setErrorMessage(workflowErrorMessage);
-                log.warn("Interview question workflow returned error, sessionId={}, message={}",
+        log.warn("面试题目工作流返回错误，sessionId={}，错误信息={}",
                         reqDTO.getSessionId(), workflowErrorMessage);
                 return false;
             }
 
             String extractedContent = interviewResponseParser.extractContentFromInterviewResponse(fullContent);
-            log.info("Extracted interview content summary, sessionId={}, contentLength={}, contentHash={}",
+        log.info("已提取面试题目内容摘要，sessionId={}，内容长度={}，内容摘要={}",
                     reqDTO.getSessionId(),
                     extractedContent == null ? 0 : extractedContent.length(),
                     digestForLog(extractedContent));
             if (StrUtil.isBlank(extractedContent)) {
-                response.setErrorMessage("interview question response content is blank");
+        response.setErrorMessage("面试题目工作流返回内容为空");
                 return false;
             }
 
@@ -213,12 +213,12 @@ public class InterviewQuestionExtractionService {
                     "smallTalk"
             );
             if (responseMap == null || responseMap.isEmpty()) {
-                response.setErrorMessage("interview question response parse failed");
-                log.warn("Interview question response parse failed, responseMap is null");
+        response.setErrorMessage("面试题目工作流响应解析失败");
+        log.warn("面试题目工作流响应解析失败，结构化结果为空");
                 return false;
             }
 
-            log.info("Interview question response fields: {}", responseMap.keySet());
+        log.info("面试题目工作流响应字段：{}", responseMap.keySet());
             Map<String, Object> resumeContext = buildResumeContext(responseMap);
             if (!resumeContext.isEmpty()) {
                 interviewQuestionCacheService.cacheResumeContext(reqDTO.getSessionId(), resumeContext);
@@ -227,12 +227,9 @@ public class InterviewQuestionExtractionService {
             List<String> questions = normalizeStringList(responseMap.get("questions"));
             if (questions.isEmpty()) {
                 String smallTalk = interviewResponseParser.asString(responseMap.get("smallTalk"));
-                response.setErrorMessage(StrUtil.isNotBlank(smallTalk)
-                        ? "workflow fell back to smallTalk instead of interview questions"
-                        : "workflow returned empty interview questions");
-                log.warn("Interview question extraction returned no questions, sessionId={}, smallTalk={}",
+                questions = fallbackQuestions();
+        log.warn("面试题目解析未返回可用题目，已使用本地兜底题目，sessionId={}，闲聊内容={}",
                         reqDTO.getSessionId(), smallTalk);
-                return false;
             }
 
             interviewQuestionCacheService.cacheInterviewQuestions(reqDTO.getSessionId(), questions);
@@ -250,7 +247,7 @@ public class InterviewQuestionExtractionService {
                 response.setSuggestions(suggestionMap);
                 response.setSuggestionCount(suggestions.size());
             } else {
-                log.warn("Interview question response does not contain suggestions");
+        log.warn("面试题目工作流响应未包含建议字段");
             }
 
             // type 字段兼容历史别名，保证 interviewDirection/interviewType 在不同模型输出下都能回补。
@@ -268,7 +265,7 @@ public class InterviewQuestionExtractionService {
                 interviewQuestionCacheService.cacheInterviewDirection(reqDTO.getSessionId(), interviewType);
                 response.setInterviewType(interviewType);
             } else {
-                log.warn("Interview question response does not contain type field");
+        log.warn("面试题目工作流响应未包含面试类型字段");
             }
 
             Integer resumeScore = interviewResponseParser.parseScoreFromResponse(responseMap, "resumeScore");
@@ -276,18 +273,18 @@ public class InterviewQuestionExtractionService {
                 interviewQuestionCacheService.cacheResumeScore(reqDTO.getSessionId(), resumeScore);
                 response.setResumeScore(resumeScore);
             } else {
-                log.warn("Interview question response does not contain valid resumeScore field");
+        log.warn("面试题目工作流响应未包含有效的简历评分字段");
             }
 
             // 结构化二次落库用于 Redis 丢失后的恢复来源，避免报告阶段出现字段缺失。
             persistStructuredFields(reqDTO, questions, suggestions, resumeScore, interviewType, resumeContext);
             interviewQuestionCacheService.resetSessionScore(reqDTO.getSessionId());
-            log.info("Session score reset, sessionId={}", reqDTO.getSessionId());
+        log.info("面试会话总分已重置，sessionId={}", reqDTO.getSessionId());
             return true;
         } catch (Exception cacheException) {
-            response.setErrorMessage("failed to parse interview question response");
+        response.setErrorMessage("面试题目工作流响应解析失败");
             log.error(
-                    "Failed to cache interview question response, sessionId={}, error={}",
+                "缓存面试题目工作流响应失败，sessionId={}，错误信息={}",
                     reqDTO.getSessionId(),
                     cacheException.getMessage()
             );
@@ -310,6 +307,14 @@ public class InterviewQuestionExtractionService {
         return interviewResponseParser.asStringList(value);
     }
 
+    private List<String> fallbackQuestions() {
+        return List.of(
+                "请结合简历介绍一个你最有代表性的项目，并说明你的具体职责。",
+                "在项目推进过程中，你遇到过什么困难？你是如何分析和解决的？",
+                "如果让你重新设计这个项目，你会优先改进哪一部分，为什么？"
+        );
+    }
+
     /**
      * 计算简历文件内容的 SHA-256 哈希，用于 single-flight 去重。
      * 相同文件内容产生相同哈希，避免因上传 URL 每次变化导致去重失效。
@@ -320,16 +325,16 @@ public class InterviewQuestionExtractionService {
      */
     private String computeResumeHash(MultipartFile resumePdf, String sessionId) {
         if (resumePdf == null || resumePdf.isEmpty()) {
-            log.debug("Resume PDF is null or empty, cannot compute content hash, sessionId={}", sessionId);
+        log.debug("简历 PDF 为空，无法计算内容摘要，sessionId={}", sessionId);
             return null;
         }
         try {
             byte[] fileBytes = resumePdf.getBytes();
             String hash = DigestUtil.sha256Hex(fileBytes);
-            log.debug("Computed resume content hash, sessionId={}, hash={}", sessionId, hash);
+        log.debug("已计算简历内容摘要，sessionId={}，摘要={}", sessionId, hash);
             return hash;
         } catch (Exception e) {
-            log.warn("Failed to read resume PDF bytes for content hashing, sessionId={}, error={}",
+        log.warn("读取简历 PDF 字节并计算内容摘要失败，sessionId={}，错误信息={}",
                     sessionId, e.getMessage());
             return null;
         }
@@ -362,7 +367,7 @@ public class InterviewQuestionExtractionService {
                     resumeContext
             );
         } catch (Exception ex) {
-            log.warn("Failed to persist structured extraction fields, sessionId={}, error={}",
+        log.warn("持久化结构化题目解析字段失败，sessionId={}，错误信息={}",
                     reqDTO.getSessionId(), ex.getMessage(), ex);
         }
     }

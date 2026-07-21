@@ -50,6 +50,7 @@ public class ResumeRagService {
     private final RerankGateway rerankGateway;
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
+    private final ThreadLocal<RagStageTrace> ragStageTrace = new ThreadLocal<>();
 
     public boolean enabled() {
         return ragProperties.isEnabled();
@@ -82,13 +83,13 @@ public class ResumeRagService {
                 return vectors;
             }
             String message = "Embedding gateway returned mismatched vector count";
-            log.warn("{}; storing text-only chunks for BM25 fallback. expected={}, actual={}",
+            log.warn("{}；将仅保存文本分片供 BM25 兜底检索使用。预期向量数={}，实际向量数={}",
                     message,
                     chunks.size(), vectors == null ? 0 : vectors.size());
             publishRagToolEvent("rag-embedding-store", "RESUME_ANALYSIS", "storeCvBO",
                     "expected=" + chunks.size(), false, message, Map.of("expected", chunks.size(), "actual", vectors == null ? 0 : vectors.size()));
         } catch (Exception ex) {
-            log.warn("Resume embedding failed during chunk storage, storing text-only chunks for BM25 fallback", ex);
+            log.warn("简历分片存储时向量化失败，已仅保存文本分片供 BM25 兜底检索使用。", ex);
             publishRagToolEvent("rag-embedding-store", "RESUME_ANALYSIS", "storeCvBO",
                     "chunks=" + chunks.size(), false, ex.getMessage(), Map.of("chunkCount", chunks.size()));
         }
@@ -113,15 +114,10 @@ public class ResumeRagService {
                     "resume-template-retrieval", false);
             return List.of();
         }
+        String ragTraceId = beginRagStageTrace();
         Set<String> resumeScope = allowedResumeIds == null ? Set.of() : allowedResumeIds;
         Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
-        List<String> allQueries = new ArrayList<>();
-        allQueries.add(query);
-        String hyde = generateHyDE(query);
-        if (hyde != null && !hyde.isBlank()) {
-            allQueries.add(hyde);
-        }
-        allQueries.addAll(generateMultiQueries(query));
+        List<String> allQueries = expandQueries(query);
 
         Set<String> candidateResumeIds = hierarchicalCoarseSearch(allQueries, ragProperties.getCoarseRecallLimit(), resumeScope, metadataFilters);
         if (candidateResumeIds.isEmpty() && !resumeScope.isEmpty()) {
@@ -135,15 +131,18 @@ public class ResumeRagService {
         );
         List<String> augmented = contextAugment(fusedChunks, Math.max(limit * 2, limit));
         List<String> results = rerank(query, augmented, limit);
-        log.info("Career resume RAG completed. querySize={}, userId={}, scope={}, candidates={}, results={}, costMs={}",
+        log.info("简历 RAG 召回完成。查询长度={}，用户编号={}，简历范围数={}，候选数={}，结果数={}，耗时毫秒={}",
                 query.length(), userId, resumeScope.size(), candidateResumeIds.size(), results.size(), System.currentTimeMillis() - start);
+        finishRagStageTrace(ragTraceId, start);
         publishRecallMetric(query, userId, resumeScope.size(), results.size(), start, "resume-template-retrieval", true);
         return results;
     }
 
     /**
-     * Runs the same scoped hybrid recall as template retrieval but keeps resume identity so callers can
-     * compare selected resume versions. No resume outside {@code allowedResumeIds} is returned.
+     * 在用户明确勾选的简历范围内执行混合召回，并保留简历身份用于版本之间的岗位匹配比较。
+     *
+     * <p>无论向量、BM25、RRF 或重排阶段如何降级，最终都不得返回 {@code allowedResumeIds}
+     * 范围以外的简历，避免候选集合被历史数据或其他上传任务污染。</p>
      */
     public List<ResumeRagMatch> retrieveResumeMatches(String query, int limit, Long userId, Set<String> allowedResumeIds) {
         return retrieveResumeMatches(query, limit, userId, allowedResumeIds, ragProperties.isEnabled());
@@ -154,12 +153,18 @@ public class ResumeRagService {
             return List.of();
         }
         long start = System.currentTimeMillis();
+        String ragTraceId = beginRagStageTrace();
         if (!enabled) {
             publishRecallMetric(query, userId, allowedResumeIds.size(), 0, start, "resume-job-match-retrieval", false);
             return List.of();
         }
         Set<String> resumeScope = new LinkedHashSet<>(allowedResumeIds);
         Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
+        log.info("RAG阶段诊断 traceId={} 阶段=执行计划 RAG启用=true 候选简历数={} TopK={} HyDE启用={} 多查询启用={} 多查询视角=[技能技术栈,行业项目经验,同义表达] 向量召回启用={} BM25启用={} RRF融合启用={} Rerank启用={} Rerank供应商={} Rerank模型={}",
+                ragTraceId, resumeScope.size(), limit, ragProperties.isHydeEnabled(), ragProperties.isMultiQueryEnabled(),
+                ragProperties.isVectorEnabled(), ragProperties.isBm25Enabled(), ragProperties.isRrfEnabled(),
+                ragProperties.getRerank().isEnabled(), ragProperties.getRerank().getProvider(), ragProperties.getRerank().getModel());
+        long queryExpansionStart = System.currentTimeMillis();
         List<String> allQueries = new ArrayList<>();
         allQueries.add(query);
         String hyde = generateHyDE(query);
@@ -167,18 +172,34 @@ public class ResumeRagService {
             allQueries.add(hyde);
         }
         allQueries.addAll(generateMultiQueries(query));
+        log.info("RAG阶段诊断 traceId={} 阶段=查询扩展 耗时毫秒={} HyDE实际生效={} 多查询实际数量={} 总查询数={} 查询摘要={}",
+                ragTraceId, System.currentTimeMillis() - queryExpansionStart, hyde != null && !hyde.isBlank(),
+                Math.max(0, allQueries.size() - 1 - (hyde == null || hyde.isBlank() ? 0 : 1)), allQueries.size(),
+                allQueries.stream().map(this::digest).toList());
+        log.info("RAG 查询扩展完成：HyDE生效={}，总查询数={}", hyde != null && !hyde.isBlank(), allQueries.size());
+        long coarseRecallStart = System.currentTimeMillis();
         Set<String> candidateResumeIds = hierarchicalCoarseSearch(allQueries, ragProperties.getCoarseRecallLimit(), resumeScope, metadataFilters);
         if (candidateResumeIds.isEmpty()) {
             candidateResumeIds = resumeScope;
         }
+        log.info("RAG阶段诊断 traceId={} 阶段=向量粗召回 耗时毫秒={} 向量启用={} 粗召回阈值={} 粗召回上限={} 候选结果数={} 发生全量兜底={}",
+                ragTraceId, System.currentTimeMillis() - coarseRecallStart, ragProperties.isVectorEnabled(),
+                ragProperties.getVectorMinScoreCoarse(), ragProperties.getCoarseRecallLimit(), candidateResumeIds.size(),
+                candidateResumeIds.size() == resumeScope.size());
+        log.info("RAG 粗召回完成：候选简历数={}，候选简历ID={}", candidateResumeIds.size(), candidateResumeIds);
+        long fineRecallStart = System.currentTimeMillis();
         List<RetrievedChunk> chunks = hybridFineSearch(
                 allQueries,
                 candidateResumeIds,
                 metadataFilters,
                 Math.max(limit, 1) * ragProperties.getFineRecallMultiplier());
+        log.info("RAG阶段诊断 traceId={} 阶段=细召回与融合 耗时毫秒={} 向量启用={} BM25启用={} RRF启用={} 细召回阈值={} 命中片段数={}",
+                ragTraceId, System.currentTimeMillis() - fineRecallStart, ragProperties.isVectorEnabled(),
+                ragProperties.isBm25Enabled(), ragProperties.isRrfEnabled(), ragProperties.getVectorMinScoreFine(), chunks.size());
+        log.info("RAG 细召回与RRF融合完成：命中片段数={}", chunks.size());
         Map<String, List<RetrievedChunk>> byResume = chunks.stream()
                 .collect(Collectors.groupingBy(RetrievedChunk::resumeId, LinkedHashMap::new, Collectors.toList()));
-        List<ResumeRagMatch> matches = resumeScope.stream()
+        List<ResumeRagMatch> preRerankMatches = resumeScope.stream()
                 .map(resumeId -> {
                     List<RetrievedChunk> evidence = byResume.getOrDefault(resumeId, List.of());
                     double score = evidence.stream().mapToDouble(RetrievedChunk::rrfScore).sum();
@@ -192,16 +213,39 @@ public class ResumeRagService {
                     return new ResumeRagMatch(resumeId, score, snippets);
                 })
                 .sorted(Comparator.comparingDouble(ResumeRagMatch::score).reversed())
-                .limit(Math.max(1, limit))
                 .toList();
+        long rerankStart = System.currentTimeMillis();
+        List<ResumeRagMatch> matches = rerankResumeMatches(query, preRerankMatches, limit);
+        log.info("RAG阶段诊断 traceId={} 阶段=Rerank重排 耗时毫秒={} Rerank启用={} 供应商={} 模型={} 输入简历数={} 输出简历数={}",
+                ragTraceId, System.currentTimeMillis() - rerankStart, ragProperties.getRerank().isEnabled(),
+                ragProperties.getRerank().getProvider(), ragProperties.getRerank().getModel(), preRerankMatches.size(), matches.size());
+        log.info("RAG 岗位匹配排序完成：返回简历数={}，排序简历ID={}", matches.size(), matches.stream().map(ResumeRagMatch::resumeId).toList());
+        finishRagStageTrace(ragTraceId, start);
         publishRecallMetric(query, userId, resumeScope.size(), matches.size(), start, "resume-job-match-retrieval", true);
         return matches;
     }
 
+    private List<String> expandQueries(String query) {
+        List<String> allQueries = new ArrayList<>();
+        allQueries.add(query);
+        String hyde = generateHyDE(query);
+        if (hyde != null && !hyde.isBlank()) {
+            allQueries.add(hyde);
+        }
+        allQueries.addAll(generateMultiQueries(query));
+        return allQueries;
+    }
+
     private String generateHyDE(String query) {
+        long startedAt = System.nanoTime();
+        if (!ragProperties.isHydeEnabled()) {
+            logRagStage("HyDE", false, startedAt, 1, 0, "未使用", "阶段已关闭");
+            return null;
+        }
         String cacheKey = CACHE_KEY_HYDE + digest(query);
         String cached = getCached(cacheKey);
         if (cached != null) {
+            logRagStage("HyDE", true, startedAt, 1, 1, "命中", "");
             return cached;
         }
         try {
@@ -211,20 +255,29 @@ public class ResumeRagService {
                     .userPrompt(query)
                     .build()).content();
             setCached(cacheKey, result);
+            logRagStage("HyDE", true, startedAt, 1, result == null || result.isBlank() ? 0 : 1, "未命中", "");
             return result;
         } catch (Exception ex) {
-            log.warn("HyDE generation failed, original query will be used", ex);
+            log.warn("HyDE 假设文档生成失败，已使用原始查询继续检索。", ex);
             publishRagToolEvent("rag-hyde", "JD_ALIGNMENT", query,
                     "fallback=original-query", false, ex.getMessage(), Map.of("queryDigest", digest(query)));
+            logRagStage("HyDE", true, startedAt, 1, 0, "未命中", "原始查询");
             return null;
         }
     }
 
     private List<String> generateMultiQueries(String query) {
+        long startedAt = System.nanoTime();
+        if (!ragProperties.isMultiQueryEnabled()) {
+            logRagStage("Multi-query", false, startedAt, 1, 0, "未使用", "阶段已关闭");
+            return List.of();
+        }
         String cacheKey = CACHE_KEY_MQ + digest(query);
         String cached = getCached(cacheKey);
         if (cached != null) {
-            return cached.lines().filter(line -> !line.isBlank()).limit(ragProperties.getMultiQueryCount()).toList();
+            List<String> queries = cached.lines().filter(line -> !line.isBlank()).limit(ragProperties.getMultiQueryCount()).toList();
+            logRagStage("Multi-query", true, startedAt, 1, queries.size(), "命中", "");
+            return queries;
         }
         try {
             String result = aiGateway.chat(AiPromptRequest.builder()
@@ -240,17 +293,111 @@ public class ResumeRagService {
             if (!queries.isEmpty()) {
                 setCached(cacheKey, String.join("\n", queries));
             }
+            logRagStage("Multi-query", true, startedAt, 1, queries.size(), "未命中", "");
             return queries;
         } catch (Exception ex) {
-            log.warn("Multi-query generation failed", ex);
+            log.warn("多查询生成失败，已继续使用现有查询。", ex);
             publishRagToolEvent("rag-multi-query", "JD_ALIGNMENT", query,
                     "fallback=empty", false, ex.getMessage(), Map.of("queryDigest", digest(query)));
+            logRagStage("Multi-query", true, startedAt, 1, 0, "未命中", "空查询集");
             return List.of();
         }
     }
 
+    private void logRagStage(
+            String stage,
+            boolean enabled,
+            long startedAt,
+            int inputCount,
+            int outputCount,
+            String cacheStatus,
+            String fallbackReason) {
+        long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+        recordRagStage(stage, enabled, durationMs, inputCount, outputCount, cacheStatus, fallbackReason);
+    }
+
+    private void logRagStageDuration(
+            String stage,
+            boolean enabled,
+            long durationNanos,
+            int inputCount,
+            int outputCount,
+            String cacheStatus,
+            String fallbackReason) {
+        recordRagStage(stage, enabled, durationNanos / 1_000_000, inputCount, outputCount, cacheStatus, fallbackReason);
+    }
+
+    private String beginRagStageTrace() {
+        String traceId = UUID.randomUUID().toString().substring(0, 8);
+        ragStageTrace.set(new RagStageTrace(traceId));
+        return traceId;
+    }
+
+    private void finishRagStageTrace(String traceId, long requestStartedAt) {
+        RagStageTrace trace = ragStageTrace.get();
+        if (trace == null) {
+            return;
+        }
+        String stages = trace.stages.stream()
+                .map(stage -> "|  [*] %-10s enabled=%-5s costMs=%-6d input=%-3d output=%-3d cache=%s fallback=%s".formatted(
+                        stage.name, stage.enabled, stage.durationMs, stage.inputCount, stage.outputCount,
+                        stage.cacheStatus, stage.fallbackReason))
+                .collect(Collectors.joining("\n"));
+        log.info("""
+
++==================== [RAG-TRACE {}] ====================+
+|  totalCostMs={}
+{}
++================== [RAG-TRACE END] ==================+
+""", traceId, System.currentTimeMillis() - requestStartedAt, stages);
+        ragStageTrace.remove();
+    }
+
+    private void recordRagStage(
+            String stage,
+            boolean enabled,
+            long durationMs,
+            int inputCount,
+            int outputCount,
+            String cacheStatus,
+            String fallbackReason) {
+        RagStageTrace trace = ragStageTrace.get();
+        if (trace != null) {
+            trace.stages.add(new RagStageMetric(stage, enabled, durationMs, inputCount, outputCount, cacheStatus, fallbackReason));
+            return;
+        }
+        log.info("RAG阶段指标 阶段={} 启用={} 耗时毫秒={} 输入数量={} 输出数量={} 缓存状态={} 回退原因={}",
+                stage, enabled, durationMs, inputCount, outputCount, cacheStatus, fallbackReason);
+    }
+
+    private static final class RagStageTrace {
+        private final String traceId;
+        private final List<RagStageMetric> stages = new ArrayList<>();
+
+        private RagStageTrace(String traceId) {
+            this.traceId = traceId;
+        }
+    }
+
+    private record RagStageMetric(
+            String name,
+            boolean enabled,
+            long durationMs,
+            int inputCount,
+            int outputCount,
+            String cacheStatus,
+            String fallbackReason) {
+    }
+
     private Set<String> hierarchicalCoarseSearch(List<String> queries, int targetLimit, Set<String> resumeScope, Map<String, String> metadataFilters) {
+        long startedAt = System.nanoTime();
         Set<String> resumeIds = new LinkedHashSet<>();
+        if (!ragProperties.isVectorEnabled()) {
+            log.info("RAG 向量粗召回已关闭，将使用所选简历范围作为候选集。");
+            logRagStage("粗向量召回", false, startedAt, queries.size(), 0, "不适用", "阶段已关闭");
+            return resumeIds;
+        }
+        boolean fallbackOccurred = false;
         Set<String> coarseTypes = Set.of(CHUNK_TYPE_OVERVIEW, CHUNK_TYPE_SKILLS);
         for (String query : queries) {
             List<ResumeVectorMatch> matches;
@@ -264,7 +411,8 @@ public class ResumeRagService {
                         targetLimit * 2
                 );
             } catch (Exception ex) {
-                log.warn("Vector coarse recall failed, BM25 fine recall can still run. queryDigest={}", digest(query), ex);
+                fallbackOccurred = true;
+                log.warn("向量粗召回失败，BM25 细召回仍将继续执行。查询摘要={}", digest(query), ex);
                 publishRagToolEvent("rag-vector-coarse", "JD_ALIGNMENT", query,
                         "fallback=bm25-fine", false, ex.getMessage(), Map.of("queryDigest", digest(query), "targetLimit", targetLimit));
                 continue;
@@ -274,41 +422,75 @@ public class ResumeRagService {
                 if (resumeId != null && !resumeId.isBlank()) {
                     resumeIds.add(resumeId);
                     if (resumeIds.size() >= targetLimit) {
+                        logRagStage("粗向量召回", true, startedAt, queries.size(), resumeIds.size(), "不适用",
+                                fallbackOccurred ? "部分查询失败" : "");
                         return resumeIds;
                     }
                 }
             }
         }
+        logRagStage("粗向量召回", true, startedAt, queries.size(), resumeIds.size(), "不适用",
+                fallbackOccurred ? "部分查询失败" : "");
         return resumeIds;
     }
 
     private List<RetrievedChunk> hybridFineSearch(List<String> queries, Set<String> candidateResumeIds, Map<String, String> metadataFilters, int limit) {
         List<List<RetrievedChunk>> rankedLists = new ArrayList<>();
+        long vectorDurationNanos = 0;
+        long bm25DurationNanos = 0;
+        int vectorOutputCount = 0;
+        int bm25OutputCount = 0;
         for (String query : queries) {
-            try {
-                List<ResumeVectorMatch> vectorMatches = vectorStore.search(
-                        embeddingGateway.embed(query),
-                        Set.of(),
-                        candidateResumeIds,
-                        metadataFilters,
-                        ragProperties.getVectorMinScoreFine(),
-                        limit
-                );
-                List<RetrievedChunk> vectorRanked = vectorMatches.stream().map(this::toRetrievedChunk).toList();
-                if (!vectorRanked.isEmpty()) {
-                    rankedLists.add(vectorRanked);
+            if (ragProperties.isVectorEnabled()) {
+                long vectorStartedAt = System.nanoTime();
+                try {
+                    List<ResumeVectorMatch> vectorMatches = vectorStore.search(
+                            embeddingGateway.embed(query),
+                            Set.of(),
+                            candidateResumeIds,
+                            metadataFilters,
+                            ragProperties.getVectorMinScoreFine(),
+                            limit
+                    );
+                    List<RetrievedChunk> vectorRanked = vectorMatches.stream().map(this::toRetrievedChunk).toList();
+                    vectorOutputCount += vectorRanked.size();
+                    if (!vectorRanked.isEmpty()) {
+                        rankedLists.add(vectorRanked);
+                    }
+                } catch (Exception ex) {
+                    log.warn("向量细召回失败，已继续使用独立 BM25 通道。查询摘要={}", digest(query), ex);
+                    publishRagToolEvent("rag-vector-fine", "JD_ALIGNMENT", query,
+                            "fallback=bm25", false, ex.getMessage(), Map.of("queryDigest", digest(query), "limit", limit));
+                } finally {
+                    vectorDurationNanos += System.nanoTime() - vectorStartedAt;
                 }
-            } catch (Exception ex) {
-                log.warn("Vector fine recall failed, continuing with independent BM25 lane. queryDigest={}", digest(query), ex);
-                publishRagToolEvent("rag-vector-fine", "JD_ALIGNMENT", query,
-                        "fallback=bm25", false, ex.getMessage(), Map.of("queryDigest", digest(query), "limit", limit));
             }
-            List<RetrievedChunk> bm25Ranked = bm25Recall(query, candidateResumeIds, metadataFilters, limit);
-            if (!bm25Ranked.isEmpty()) {
-                rankedLists.add(bm25Ranked);
+            if (ragProperties.isBm25Enabled()) {
+                long bm25StartedAt = System.nanoTime();
+                try {
+                    List<RetrievedChunk> bm25Ranked = bm25Recall(query, candidateResumeIds, metadataFilters, limit);
+                    bm25OutputCount += bm25Ranked.size();
+                    if (!bm25Ranked.isEmpty()) {
+                        rankedLists.add(bm25Ranked);
+                    }
+                } finally {
+                    bm25DurationNanos += System.nanoTime() - bm25StartedAt;
+                }
             }
         }
-        return rrfFusionChunks(rankedLists, ragProperties.getRrfK(), limit);
+        logRagStageDuration("细向量召回", ragProperties.isVectorEnabled(), vectorDurationNanos,
+                queries.size(), vectorOutputCount, "不适用", "");
+        logRagStageDuration("BM25召回", ragProperties.isBm25Enabled(), bm25DurationNanos,
+                queries.size(), bm25OutputCount, "不适用", "");
+        long fusionStartedAt = System.nanoTime();
+        List<RetrievedChunk> fused = ragProperties.isRrfEnabled()
+                ? rrfFusionChunks(rankedLists, ragProperties.getRrfK(), limit)
+                : mergeRankedChunksWithoutRrf(rankedLists, limit);
+        logRagStage("RRF融合", ragProperties.isRrfEnabled(), fusionStartedAt,
+                rankedLists.size(), fused.size(), "不适用", ragProperties.isRrfEnabled()
+                        ? "chunkWeights=" + ragProperties.getChunkWeights()
+                        : "稳定去重合并");
+        return fused;
     }
 
     private List<RetrievedChunk> bm25Recall(
@@ -320,7 +502,7 @@ public class ResumeRagService {
         try {
             documents = vectorStore.findByResumeIds(candidateResumeIds);
         } catch (Exception ex) {
-            log.warn("BM25 recall source lookup failed. queryDigest={}", digest(query), ex);
+            log.warn("BM25 召回来源查询失败。查询摘要={}", digest(query), ex);
             publishRagToolEvent("rag-bm25-source", "JD_ALIGNMENT", query,
                     "fallback=empty", false, ex.getMessage(), Map.of("queryDigest", digest(query), "candidateCount", candidateResumeIds == null ? 0 : candidateResumeIds.size()));
             return List.of();
@@ -348,7 +530,7 @@ public class ResumeRagService {
             for (int i = 0; i < rankedList.size(); i++) {
                 RetrievedChunk chunk = rankedList.get(i);
                 String key = chunk.resumeId() + "|" + chunk.chunkType() + "|" + chunk.chunkIndex();
-                scores.merge(key, 1.0 / (k + i + 1), Double::sum);
+                scores.merge(key, chunkWeight(chunk.chunkType()) / (k + i + 1), Double::sum);
                 chunks.putIfAbsent(key, chunk);
             }
         }
@@ -357,6 +539,64 @@ public class ResumeRagService {
                 .sorted(Comparator.comparingDouble(RetrievedChunk::rrfScore).reversed())
                 .limit(limit)
                 .toList();
+    }
+
+    private double chunkWeight(String chunkType) {
+        Double configuredWeight = ragProperties.getChunkWeights() == null
+                ? null
+                : ragProperties.getChunkWeights().get(chunkType);
+        if (configuredWeight == null) {
+            return 1.0;
+        }
+        if (!Double.isFinite(configuredWeight) || configuredWeight <= 0.0) {
+            log.warn("已忽略无效的 RRF 分片权重。分片类型={}，权重={}；已使用默认值 1.0", chunkType, configuredWeight);
+            return 1.0;
+        }
+        return configuredWeight;
+    }
+
+    /** RRF 关闭时保留各召回通道的原始排序，避免直接比较向量与 BM25 的异构分数。 */
+    private List<RetrievedChunk> mergeRankedChunksWithoutRrf(List<List<RetrievedChunk>> rankedLists, int limit) {
+        Map<String, RetrievedChunk> uniqueChunks = new LinkedHashMap<>();
+        for (List<RetrievedChunk> rankedList : rankedLists) {
+            for (RetrievedChunk chunk : rankedList) {
+                String key = chunk.resumeId() + "|" + chunk.chunkType() + "|" + chunk.chunkIndex();
+                uniqueChunks.putIfAbsent(key, chunk);
+            }
+        }
+        return uniqueChunks.values().stream().limit(limit).toList();
+    }
+
+    private List<ResumeRagMatch> rerankResumeMatches(String query, List<ResumeRagMatch> matches, int limit) {
+        int resultLimit = Math.max(1, limit);
+        if (!ragProperties.getRerank().isEnabled()) {
+            return matches.stream().limit(resultLimit).toList();
+        }
+        int candidateLimit = Math.max(resultLimit, resultLimit * ragProperties.getFineRecallMultiplier());
+        Map<String, ResumeRagMatch> candidates = new LinkedHashMap<>();
+        matches.stream()
+                .filter(match -> !match.evidence().isEmpty())
+                .limit(candidateLimit)
+                .forEach(match -> candidates.put("[resumeId=" + match.resumeId() + "]\n"
+                        + String.join("\n", match.evidence()), match));
+        if (candidates.isEmpty()) {
+            return matches.stream().limit(resultLimit).toList();
+        }
+        List<String> rerankedDocuments = rerank(query, new ArrayList<>(candidates.keySet()), resultLimit);
+        log.info("RAG 岗位重排完成：输入候选数={}，重排返回数={}，请求TopK={}",
+                candidates.size(), rerankedDocuments.size(), resultLimit);
+        List<ResumeRagMatch> reranked = rerankedDocuments.stream()
+                .map(candidates::get)
+                .filter(match -> match != null)
+                .limit(resultLimit)
+                .toList();
+        if (reranked.isEmpty()) {
+            return matches.stream().limit(resultLimit).toList();
+        }
+        Map<String, ResumeRagMatch> completed = new LinkedHashMap<>();
+        reranked.forEach(match -> completed.put(match.resumeId(), match));
+        matches.forEach(match -> completed.putIfAbsent(match.resumeId(), match));
+        return completed.values().stream().limit(resultLimit).toList();
     }
 
     private List<String> contextAugment(List<RetrievedChunk> chunks, int limit) {
@@ -371,24 +611,34 @@ public class ResumeRagService {
     }
 
     private List<String> rerank(String query, List<String> candidates, int limit) {
+        long startedAt = System.nanoTime();
         if (candidates.isEmpty()) {
+            logRagStage("Rerank", ragProperties.getRerank().isEnabled(), startedAt, 0, 0, "不适用", "无候选");
             return List.of();
+        }
+        if (!ragProperties.getRerank().isEnabled()) {
+            List<String> result = candidates.stream().limit(limit).toList();
+            logRagStage("Rerank", false, startedAt, candidates.size(), result.size(), "不适用", "阶段已关闭");
+            return result;
         }
         try {
             List<String> reranked = rerankGateway.rerank(query, candidates, limit);
             if (reranked != null && !reranked.isEmpty()) {
+                logRagStage("Rerank", true, startedAt, candidates.size(), reranked.size(), "不适用", "");
                 return reranked;
             }
         } catch (Exception ex) {
-            log.warn("External rerank failed, BM25 fallback will be used", ex);
+            log.warn("外部重排服务调用失败，已使用 BM25 兜底排序。", ex);
             publishRagToolEvent("rag-rerank", "JD_ALIGNMENT", query,
                     "fallback=bm25", false, ex.getMessage(), Map.of("candidateCount", candidates.size(), "limit", limit));
         }
         Map<String, Double> bm25 = Bm25Scorer.score(candidates, query);
-        return candidates.stream()
+        List<String> result = candidates.stream()
                 .sorted(Comparator.comparingDouble((String text) -> bm25.getOrDefault(text, 0.0)).reversed())
                 .limit(limit)
                 .toList();
+        logRagStage("Rerank", true, startedAt, candidates.size(), result.size(), "不适用", "BM25回退");
+        return result;
     }
 
     private RetrievedChunk toRetrievedChunk(ResumeVectorMatch match) {
@@ -465,7 +715,7 @@ public class ResumeRagService {
         try {
             return redisTemplate.opsForValue().get(key);
         } catch (Exception ex) {
-            log.debug("RAG cache read failed. key={}", key, ex);
+            log.debug("RAG 缓存读取失败。缓存键={}", key, ex);
             return null;
         }
     }
@@ -481,7 +731,7 @@ public class ResumeRagService {
         try {
             redisTemplate.opsForValue().set(key, value, Duration.ofSeconds(ragProperties.getCacheTtlSeconds()));
         } catch (Exception ex) {
-            log.debug("RAG cache write failed. key={}", key, ex);
+            log.debug("RAG 缓存写入失败。缓存键={}", key, ex);
         }
     }
 

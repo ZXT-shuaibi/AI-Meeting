@@ -96,7 +96,7 @@ public class InterviewResponseParser {
             }
             return null;
         } catch (Exception e) {
-            log.error("Failed to extract content: {}", e.getMessage());
+            log.error("提取面试响应正文失败：{}", e.getMessage());
             return null;
         }
     }
@@ -190,7 +190,7 @@ public class InterviewResponseParser {
             List<?> rawList = (List<?>) value;
             return rawList.stream()
                     .filter(Objects::nonNull)
-                    .map(String::valueOf)
+                    .map(this::extractTextValue)
                     .map(String::trim)
                     .filter(StrUtil::isNotBlank)
                     .collect(Collectors.toList());
@@ -213,7 +213,7 @@ public class InterviewResponseParser {
                             .collect(Collectors.toList());
                 }
             } catch (Exception ignored) {
-                // Fall through.
+        // 当前格式不匹配，继续尝试后续兼容解析分支。
             }
         }
 
@@ -226,6 +226,22 @@ public class InterviewResponseParser {
         }
 
         return Collections.singletonList(item);
+    }
+
+    private String extractTextValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            for (String key : List.of("question", "content", "text", "title", "value")) {
+                Object text = map.get(key);
+                if (text != null && StrUtil.isNotBlank(String.valueOf(text))) {
+                    return String.valueOf(text);
+                }
+            }
+            return "";
+        }
+        if (value instanceof JSONObject json) {
+            return extractTextValue(InterviewJsonValueNormalizer.asMap(json));
+        }
+        return String.valueOf(value);
     }
 
     private Integer parseInteger(Object value) {

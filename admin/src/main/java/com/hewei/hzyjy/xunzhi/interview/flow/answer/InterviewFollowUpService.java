@@ -5,6 +5,8 @@ import com.alibaba.fastjson2.JSON;
 import com.hewei.hzyjy.xunzhi.agent.application.BusinessAgentResolver;
 import com.hewei.hzyjy.xunzhi.agent.application.BusinessAgentScene;
 import com.hewei.hzyjy.xunzhi.agent.dao.entity.AgentPropertiesDO;
+import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContext;
+import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContextProvider;
 import com.hewei.hzyjy.xunzhi.interview.application.guard.core.InterviewAiGuardException;
 import com.hewei.hzyjy.xunzhi.interview.application.guard.core.InterviewAiGuardStage;
 import com.hewei.hzyjy.xunzhi.interview.shared.InterviewAiInvoker;
@@ -29,6 +31,7 @@ public class InterviewFollowUpService {
     private static final String KEY_MAX_FOLLOW_UP = "max_follow_up";
     private static final String KEY_QUESTION = "question";
     private static final String KEY_RESUME_CONTEXT = "resume_context";
+    private static final String KEY_INTERVIEW_HISTORY_CONTEXT = "interview_history_context";
     private static final String KEY_ASK_TO_USER = "ask_to_user";
     private static final String KEY_END_INTERVIEW = "end_interview";
 
@@ -36,6 +39,7 @@ public class InterviewFollowUpService {
     private final InterviewQuestionCacheService interviewQuestionCacheService;
     private final InterviewAiInvoker interviewAiInvoker;
     private final InterviewResponseParser interviewResponseParser;
+    private final InterviewHistoryContextProvider interviewHistoryContextProvider;
 
     public FollowUpQuestionResult generateFollowUpQuestion(
             String sessionId,
@@ -75,7 +79,7 @@ public class InterviewFollowUpService {
                     agentProperties
             );
         } catch (Exception ex) {
-            log.warn("Follow-up agent unavailable, fallback to scorer suggestion, sessionId={}", sessionId, ex);
+            log.warn("追问工作流不可用，已尝试使用评分器建议作为兜底，sessionId={}", sessionId, ex);
         }
 
         // 3) 工作流失败时回退到评分器建议问题，仍可继续流程。
@@ -101,15 +105,17 @@ public class InterviewFollowUpService {
         }
 
         try {
+            InterviewHistoryContext historyContext = interviewHistoryContextProvider.load(sessionId);
             Map<String, Object> parameters = buildWorkflowParameters(
                     answerContent,
                     currentQuestion,
                     currentFollowUpCount,
                     maxFollowUp,
-                    buildResumeContextText(interviewQuestionCacheService.getSessionResumeContext(sessionId))
+                    buildResumeContextText(interviewQuestionCacheService.getSessionResumeContext(sessionId)),
+                    historyContext.toPromptText(1400)
             );
             log.info(
-                    "Follow-up workflow request, sessionId={}, requestId={}, question={}, followUpCount={}, maxFollowUp={}",
+                    "追问工作流请求，sessionId={}，requestId={}，当前题目={}，已追问次数={}，最大追问次数={}",
                     sessionId,
                     requestId,
                     clip(currentQuestion, 120),
@@ -132,7 +138,7 @@ public class InterviewFollowUpService {
             );
             String workflowErrorMessage = interviewResponseParser.extractWorkflowErrorMessage(workflowResponse);
             if (StrUtil.isNotBlank(workflowErrorMessage)) {
-                log.warn("Follow-up workflow returned error, sessionId={}, message={}", sessionId, workflowErrorMessage);
+                log.warn("追问工作流返回错误，sessionId={}，错误信息={}", sessionId, workflowErrorMessage);
                 return null;
             }
 
@@ -151,10 +157,10 @@ public class InterviewFollowUpService {
             }
             return sanitizeFollowUpQuestion(askToUser);
         } catch (InterviewAiGuardException ex) {
-            log.warn("Follow-up workflow fast-failed, sessionId={}, code={}", sessionId, ex.getErrorCode());
+            log.warn("追问工作流被快速失败保护拦截，sessionId={}，错误码={}", sessionId, ex.getErrorCode());
             return null;
         } catch (Exception ex) {
-            log.warn("Failed to invoke follow-up workflow, sessionId={}", sessionId, ex);
+            log.warn("调用追问工作流失败，sessionId={}", sessionId, ex);
             return null;
         }
     }
@@ -164,7 +170,8 @@ public class InterviewFollowUpService {
             String currentQuestion,
             int currentFollowUpCount,
             int maxFollowUp,
-            String resumeContextText) {
+            String resumeContextText,
+            String historyContextText) {
         Map<String, Object> parameters = new LinkedHashMap<>();
         parameters.put(KEY_AGENT_USER_INPUT, answerContent);
         parameters.put(KEY_MODE, "FOLLOW_UP");
@@ -190,6 +197,10 @@ public class InterviewFollowUpService {
         if ("none".equalsIgnoreCase(normalized)
                 || "null".equalsIgnoreCase(normalized)
                 || "N/A".equalsIgnoreCase(normalized)
+                || "无".equals(normalized)
+                || "无需追问".equals(normalized)
+                || "不需要追问".equals(normalized)
+                || "无追问".equals(normalized)
                 || "-".equals(normalized)
                 || "__FINISH__".equalsIgnoreCase(normalized)) {
             return null;

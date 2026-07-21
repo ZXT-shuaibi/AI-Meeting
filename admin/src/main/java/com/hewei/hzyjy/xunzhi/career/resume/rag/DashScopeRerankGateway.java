@@ -30,12 +30,14 @@ public class DashScopeRerankGateway implements RerankGateway {
             invokeBuilder(builder, "documents", candidates);
             invokeBuilder(builder, "topN", limit);
             invokeBuilder(builder, "returnDocuments", true);
-            Object param = builder.getClass().getMethod("build").invoke(builder);
+            Method buildMethod = builder.getClass().getMethod("build");
+            buildMethod.trySetAccessible();
+            Object param = buildMethod.invoke(builder);
             Object reranker = textReRankClass.getConstructor().newInstance();
             Object result = reranker.getClass().getMethod("call", paramClass).invoke(reranker, param);
             return extractDocuments(result, limit);
         } catch (Exception ex) {
-            log.warn("DashScope rerank unavailable, fallback ranking will be used", ex);
+            log.warn("DashScope 重排服务不可用，已使用兜底排序。", ex);
             return List.of();
         }
     }
@@ -51,6 +53,7 @@ public class DashScopeRerankGateway implements RerankGateway {
     private void invokeBuilder(Object builder, String methodName, Object value) throws Exception {
         for (Method method : builder.getClass().getMethods()) {
             if (method.getName().equals(methodName) && method.getParameterCount() == 1) {
+                method.trySetAccessible();
                 method.invoke(builder, value);
                 return;
             }

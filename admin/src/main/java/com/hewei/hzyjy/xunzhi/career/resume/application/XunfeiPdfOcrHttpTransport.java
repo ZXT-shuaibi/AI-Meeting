@@ -10,13 +10,32 @@ import okhttp3.Response;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class XunfeiPdfOcrHttpTransport implements XunfeiPdfOcrTransport {
 
     private static final String BASE_URL = "https://iocr.xfyun.cn/ocrzdq";
     private static final MediaType PDF_MEDIA_TYPE = MediaType.get("application/pdf");
-    private final OkHttpClient client = new OkHttpClient();
+    private final OkHttpClient client;
+
+    public XunfeiPdfOcrHttpTransport(ResumeOcrProperties properties) {
+        long timeoutSeconds = Math.max(1, properties == null ? 90 : properties.getTimeoutSeconds());
+        this.client = new OkHttpClient.Builder()
+                .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .build();
+    }
+
+    long readTimeoutMillis() {
+        return client.readTimeoutMillis();
+    }
+
+    long callTimeoutMillis() {
+        return client.callTimeoutMillis();
+    }
 
     @Override
     public String start(String appId, String timestamp, String signature, byte[] pdfBytes, String exportFormat) throws Exception {

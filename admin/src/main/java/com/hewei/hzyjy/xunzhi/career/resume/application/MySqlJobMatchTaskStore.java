@@ -52,7 +52,7 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
                 mapper.updateById(row);
             }
         } catch (Exception ex) {
-            log.warn("MySQL job match task persistence failed, in-memory fallback remains available. taskId={}", task.taskId(), ex);
+            log.warn("MySQL 岗位匹配任务持久化失败，内存兜底仍可用。任务编号={}", task.taskId(), ex);
         }
         return task;
     }
@@ -72,7 +72,7 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
                     return Optional.of(result);
                 }
             } catch (Exception ex) {
-                log.warn("MySQL job match task lookup failed, using in-memory fallback. taskId={}", taskId, ex);
+            log.warn("MySQL 岗位匹配任务查询失败，已使用内存兜底。任务编号={}", taskId, ex);
             }
         }
         return fallbackStore.findByTaskId(taskId);
@@ -98,7 +98,7 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
                 }
                 return Optional.empty();
             } catch (Exception ex) {
-                log.warn("MySQL job match task owner lookup failed, using in-memory fallback. taskId={}, userId={}", taskId, userId, ex);
+            log.warn("MySQL 岗位匹配任务归属查询失败，已使用内存兜底。任务编号={}，用户编号={}", taskId, userId, ex);
             }
         }
         return fallbackStore.findByTaskIdAndUserId(taskId, userId);
@@ -114,22 +114,39 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
             return fallbackStore.findRecentByUserId(userId, limit);
         }
         try {
-            return mapper.selectList(Wrappers.<CareerJobMatchTaskDO>lambdaQuery()
+            var query = Wrappers.<CareerJobMatchTaskDO>lambdaQuery()
                             .eq(CareerJobMatchTaskDO::getUserId, userId)
                             .eq(CareerJobMatchTaskDO::getDelFlag, 0)
-                            .orderByDesc(CareerJobMatchTaskDO::getCreateTime)
-                            .last("limit " + Math.min(Math.max(limit, 1), 20)))
+                            .orderByDesc(CareerJobMatchTaskDO::getCreateTime);
+            if (limit > 0) query.last("limit " + limit);
+            return mapper.selectList(query)
                     .stream()
                     .map(row -> {
                         JobMatchTaskResult task = fromRow(row);
                         return new JobMatchHistoryItem(task.taskId(), task.status(), row.getJobDescription(),
-                                task.selectedResumeIds().size(), task.matchedResumes(), task.errorMessage(),
+                                task.selectedResumeIds().size(), task.selectedResumeIds(),
+                                row.getLimitCount() == null ? task.matchedResumes().size() : row.getLimitCount(),
+                                task.matchedResumes(), task.errorMessage(),
                                 row.getCreateTime() == null ? null : row.getCreateTime().toInstant());
                     })
                     .toList();
         } catch (Exception ex) {
-            log.warn("MySQL job match history lookup failed, using in-memory fallback. userId={}", userId, ex);
+            log.warn("MySQL 岗位匹配历史查询失败，已使用内存兜底。用户编号={}", userId, ex);
             return fallbackStore.findRecentByUserId(userId, limit);
+        }
+    }
+
+    @Override
+    public long countByUserId(Long userId) {
+        CareerJobMatchTaskMapper mapper = mapperProvider.getIfAvailable();
+        if (mapper == null || userId == null) return fallbackStore.countByUserId(userId);
+        try {
+            return mapper.selectCount(Wrappers.<CareerJobMatchTaskDO>lambdaQuery()
+                    .eq(CareerJobMatchTaskDO::getUserId, userId)
+                    .eq(CareerJobMatchTaskDO::getDelFlag, 0));
+        } catch (Exception ex) {
+            log.warn("MySQL 岗位匹配任务数量查询失败，已使用内存兜底。用户编号={}", userId, ex);
+            return fallbackStore.countByUserId(userId);
         }
     }
 

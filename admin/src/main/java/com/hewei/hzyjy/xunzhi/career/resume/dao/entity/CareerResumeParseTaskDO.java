@@ -20,6 +20,7 @@ public class CareerResumeParseTaskDO extends BaseDO {
     private Long userId;
     private String status;
     private Long resumeId;
+    private Long displayOrder;
     private String originalFilename;
     private Long fileSize;
     private String contentType;

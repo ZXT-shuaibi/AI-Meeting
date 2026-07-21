@@ -14,5 +14,7 @@ public interface ResumeParseTaskStore {
 
     List<ResumeParseTaskRecord> findByUserId(Long userId, String status);
 
+    void updateDisplayOrder(Long userId, List<Long> resumeIds);
+
     List<ResumeParseTaskRecord> findStaleActiveTasks(Instant updatedBefore, int limit);
 }

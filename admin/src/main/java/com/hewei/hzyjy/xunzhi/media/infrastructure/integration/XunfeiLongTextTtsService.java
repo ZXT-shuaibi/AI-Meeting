@@ -32,8 +32,10 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Xunfei long-text TTS service based on the HTTP API.
- * Docs: https://www.xfyun.cn/doc/tts/long_text_tts/API.html
+ * 基于讯飞 HTTP 接口的长文本语音合成服务。
+ *
+ * <p>鉴权与请求字段遵循讯飞长文本语音合成官方协议：
+ * https://www.xfyun.cn/doc/tts/long_text_tts/API.html</p>
  */
 @Slf4j
 @Service
@@ -255,11 +257,10 @@ public class XunfeiLongTextTtsService {
     private JSONObject postWithSign(String path, JSONObject body) {
         SignedRequestInfo signedRequestInfo = buildSignedRequestInfo(path);
         String requestBody = body.toJSONString();
-        log.info("Xunfei TTS signed request, path={}, date={}, url={}, authorizationPrefix={}",
+        // 签名 URL 与 authorization 含有短期凭证，日志仅保留请求路径和时间，避免凭证泄露。
+        log.info("讯飞长文本语音请求已完成签名，路径={}，请求时间={}",
                 path,
-                signedRequestInfo.getDate(),
-                signedRequestInfo.getUrl(),
-                signedRequestInfo.getAuthorizationPrefix());
+                signedRequestInfo.getDate());
 
         Request request = new Request.Builder()
                 .url(signedRequestInfo.getUrl())
@@ -274,9 +275,9 @@ public class XunfeiLongTextTtsService {
         try (Response response = HTTP_CLIENT.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
-                log.error("Xunfei TTS HTTP failed, path={}, status={}, responseDate={}, body={}",
+                log.error("讯飞长文本语音请求失败，路径={}，状态码={}，响应时间={}，响应内容={}",
                         path, response.code(), response.header("Date"), responseBody);
-                throw new ServiceException("Xunfei TTS request failed, HTTP status: " + response.code());
+                throw new ServiceException("讯飞长文本语音请求失败，HTTP 状态码：" + response.code());
             }
             if (StrUtil.isBlank(responseBody)) {
                 throw new ServiceException("Xunfei TTS response is empty");

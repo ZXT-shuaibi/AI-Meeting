@@ -3,6 +3,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.hewei.hzyjy.xunzhi.career.agent.support.AgentResponseParser;
+import com.hewei.hzyjy.xunzhi.career.agent.support.CareerJsonResponseCleaner;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
@@ -37,7 +38,9 @@ public class AiResumeStructuringService implements ResumeStructuringService {
                             "filename", filename == null ? "" : filename
                     ))
                     .build()).content();
-            JSONObject json = AgentResponseParser.jsonObject(content).orElse(null);
+            String cleaned = CareerJsonResponseCleaner.cleanJsonResponse(content);
+            String normalized = ResumeDateNormalizer.normalizeYearMonthDates(cleaned);
+            JSONObject json = AgentResponseParser.jsonObject(normalized).orElse(null);
             if (json == null || json.isEmpty()) {
                 return null;
             }
@@ -52,15 +55,17 @@ public class AiResumeStructuringService implements ResumeStructuringService {
                     .summary(StringUtils.hasText(parsed.getSummary()) ? parsed.getSummary() : abbreviate(resumeText, 2000))
                     .build();
         } catch (Exception ex) {
-            log.warn("AI resume structuring failed, falling back to heuristic parser. filename={}", filename, ex);
+            log.warn("AI 简历结构化失败，已回退到规则解析器。文件名={}", filename, ex);
             return null;
         }
     }
 
     private String systemPrompt() {
-        return "Extract the resume into strict JSON matching CvBO fields. "
-                + "Return only JSON. Preserve contact, educations, experiences, projects, skills, certificates, summary, title, and highlights when present. "
-                + "Use arrays for list fields and ISO yyyy-MM-dd for dates when dates are explicit.";
+        return "You are a strict JSON decoder for resumes. Return exactly one valid JSON object and nothing else: no Markdown, no code fences, no commentary. "
+                + "Use standard JSON quoting, escape embedded quotation marks, and never leave trailing commas. "
+                + "Match CvBO fields only: name, title, contact, educations, experiences, projects, skills, certificates, summary, highlights, cvType. "
+                + "Use [] for missing lists, {} for missing contact, null for unknown scalar values, and yyyy-MM-dd only for explicit dates. "
+                + "Preserve resume facts; never invent information.";
     }
 
     private String abbreviate(String value, int max) {
