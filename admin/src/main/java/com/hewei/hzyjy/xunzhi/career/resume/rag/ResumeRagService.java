@@ -56,6 +56,12 @@ public class ResumeRagService {
         return ragProperties.isEnabled();
     }
 
+    /**
+     * 将结构化简历切分并写入向量存储。
+     *
+     * <p>向量化并非成功入库的前提：若 Embedding 服务超时、报错或返回数量不一致，仍会写入
+     * 文本分片和元数据，使 BM25 通道能够继续检索。这避免一次外部模型故障使简历完全不可用。</p>
+     */
     public List<ResumeChunk> storeCvBO(CvBO cv) {
         List<ResumeChunk> chunks = resumeChunker.chunk(cv);
         if (chunks.isEmpty()) {
@@ -148,6 +154,13 @@ public class ResumeRagService {
         return retrieveResumeMatches(query, limit, userId, allowedResumeIds, ragProperties.isEnabled());
     }
 
+    /**
+     * 执行岗位匹配召回的完整编排。
+     *
+     * <p>处理顺序为：原始 JD -> HyDE/多查询扩展 -> 向量粗筛 -> 向量与 BM25 细召回 -> RRF 融合
+     * -> 分片类型加权 -> 简历级聚合 -> 可选重排。每个阶段都记录耗时和降级原因；任何一个外部
+     * 通道失败都只降级该阶段，始终不突破调用方传入的候选简历范围。</p>
+     */
     public List<ResumeRagMatch> retrieveResumeMatches(String query, int limit, Long userId, Set<String> allowedResumeIds, boolean enabled) {
         if (query == null || query.isBlank() || allowedResumeIds == null || allowedResumeIds.isEmpty()) {
             return List.of();

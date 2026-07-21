@@ -16,7 +16,13 @@ import java.util.regex.Pattern;
 
 /**
  * 将既有运行时快照和轮次归档投影为安全、长度受限的 Agent 上下文。
- * 该组件只读，不写入派生数据，也不替代 Redis/Mongo 中原有的会话事实源。
+ *
+ * <p>该组件只读，不写入派生数据，也不替代 Redis/Mongo 中原有的会话事实源。它的职责是将
+ * 评分、追问和报告真正需要的“已考察题目、近期问答、低分项、追问链路、未覆盖题目”压缩成
+ * 稳定输入，避免每个 Agent 直接扫描全部历史而导致 token 无界增长或上下文不一致。</p>
+ *
+ * <p>读取失败时返回空投影而不是抛出异常，调用方应继续使用当前题目、回答和简历完成本轮；
+ * 文本进入模型前会脱敏邮箱和手机号，并按字段截断，防止历史正文泄露或挤占主任务上下文。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -35,6 +41,12 @@ public class InterviewHistoryContextProvider {
 
     private final InterviewSessionRuntimeSnapshotService runtimeSnapshotService;
 
+    /**
+     * 为一次 Agent 调用加载当前可用的历史投影。
+     *
+     * <p>快照用于确定待覆盖题目，归档轮次用于恢复已发生的问答；二者任一缺失都可工作。
+     * 只有二者同时不存在时才返回不可用投影，确保 Redis/Mongo 的短暂恢复延迟不会阻塞面试。</p>
+     */
     public InterviewHistoryContext load(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return InterviewHistoryContext.empty();
@@ -77,6 +89,12 @@ public class InterviewHistoryContextProvider {
         return List.copyOf(questionNumbers);
     }
 
+    /**
+     * 仅保留最近轮次，维持时序同时限制模型输入体积。
+     *
+     * <p>每条轮次中的题目、答案和反馈在这里统一脱敏、归一化和截断；下游 Agent 不应再直接
+     * 使用原始长文本，以保证评分与追问共享相同的上下文边界。</p>
+     */
     private List<InterviewHistoryContext.TurnSummary> recentTurns(List<InterviewTurnLog> turns) {
         int start = Math.max(0, turns.size() - RECENT_TURN_LIMIT);
         List<InterviewHistoryContext.TurnSummary> summaries = new ArrayList<>();
@@ -156,6 +174,12 @@ public class InterviewHistoryContextProvider {
         return uncovered.stream().distinct().toList();
     }
 
+    /**
+     * 对即将进入提示词的历史文本执行最小必要脱敏与长度控制。
+     *
+     * <p>本方法不会修改 Redis/Mongo 中的原始事实，只处理模型调用时的临时副本；邮箱和手机号
+     * 用固定标记替换，空白压缩为单个空格，超长文本按字符数截断。</p>
+     */
     private String sanitize(String value, int maxLength) {
         if (value == null || value.isBlank()) {
             return "";
