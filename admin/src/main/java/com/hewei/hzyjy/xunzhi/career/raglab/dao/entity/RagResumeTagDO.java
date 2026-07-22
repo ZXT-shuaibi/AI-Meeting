@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.hewei.hzyjy.xunzhi.common.database.BaseDO;
+import com.hewei.hzyjy.xunzhi.career.raglab.model.RagResumeTagType;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -29,7 +30,7 @@ public class RagResumeTagDO extends BaseDO {
     private Long resumeId;
 
     /** 标签分类，取值为 ROLE 或 DIRECTION。 */
-    private String tagType;
+    private RagResumeTagType tagType;
 
     /** 标签的实际文本取值，例如目标岗位或职业方向。 */
     private String tagValue;
