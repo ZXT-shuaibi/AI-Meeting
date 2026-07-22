@@ -157,6 +157,8 @@ public class ResumeApplicationService {
         JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId, selectedResumeIds);
         jobMatchTaskStore.save(started, jobDescription, boundedLimit, null);
         long start = System.currentTimeMillis();
+        String sessionId = "job-match:" + taskId;
+        publishBusinessInvocationStarted(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", jobDescription);
         try {
             Map<Long, ResumeParseTaskRecord> tasksByResumeId = selectedTasks.stream()
                     .collect(java.util.stream.Collectors.toMap(ResumeParseTaskRecord::resumeId, task -> task, (left, right) -> left, LinkedHashMap::new));
@@ -165,7 +167,8 @@ public class ResumeApplicationService {
             Set<String> resumeIds = selectedResumeIds.stream().map(String::valueOf)
                     .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
             boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
-            List<ResumeRagMatch> ragMatches = resumeRagService.retrieveResumeMatches(jobDescription, boundedLimit, userId, resumeIds, ragEnabled);
+            List<ResumeRagMatch> ragMatches = resumeRagService.retrieveResumeMatches(
+                    jobDescription, boundedLimit, userId, resumeIds, ragEnabled, taskId, "JD_ALIGNMENT");
             Map<Long, CvBO> resumesById = selectedResumes.stream()
                     .collect(java.util.stream.Collectors.toMap(CvBO::getId, cv -> cv));
             if (!ragEnabled) {
@@ -181,12 +184,21 @@ public class ResumeApplicationService {
             JobMatchTaskResult completed = JobMatchTaskResult.completed(taskId, userId, selectedResumeIds, candidates, templates);
             publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
                     "matched=" + candidates.size(), true, start, null, Map.of("userId", userId, "resumeScope", resumeIds.size()));
+            publishBusinessInvocationCompleted(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", start,
+                    "matched=" + candidates.size(), Map.of(
+                            "ragRequested", true,
+                            "ragEnabled", ragEnabled,
+                            "businessType", "JOB_MATCH",
+                            "resumeScope", resumeIds.size(),
+                            "resultCount", candidates.size()
+                    ));
             return jobMatchTaskStore.save(completed, jobDescription, boundedLimit, null);
         } catch (Exception ex) {
             log.warn("岗位匹配任务执行失败。任务编号={}", taskId, ex);
             JobMatchTaskResult failed = JobMatchTaskResult.failed(taskId, userId, selectedResumeIds, ex.getMessage());
             publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
                     "FAILED", false, start, ex.getMessage(), Map.of("userId", userId));
+            publishBusinessInvocationFailed(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", start, ex);
             return jobMatchTaskStore.save(failed, jobDescription, boundedLimit, ex.getMessage());
         }
     }
@@ -230,7 +242,27 @@ public class ResumeApplicationService {
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
         boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
-        List<String> templates = resumeRagService.retrieveTemplates(jobDescription, 3, userId, Set.of(String.valueOf(resumeId)), ragEnabled);
+        String optimizationTraceId = UUID.randomUUID().toString();
+        String optimizationSessionId = "resume-optimization:" + resumeId;
+        publishBusinessInvocationStarted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId, "简历优化 RAG", jobDescription);
+        List<String> templates;
+        try {
+            templates = resumeRagService.retrieveTemplates(
+                    jobDescription, 3, userId, Set.of(String.valueOf(resumeId)), ragEnabled,
+                    optimizationTraceId, "RESUME_TAILOR");
+            publishBusinessInvocationCompleted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId,
+                    "简历优化 RAG", optimizationStart, "templates=" + templates.size(), Map.of(
+                            "ragRequested", true,
+                            "ragEnabled", ragEnabled,
+                            "businessType", "RESUME_OPTIMIZATION",
+                            "resumeId", resumeId,
+                            "resultCount", templates.size()
+                    ));
+        } catch (RuntimeException ex) {
+            publishBusinessInvocationFailed(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId,
+                    "简历优化 RAG", optimizationStart, ex);
+            throw ex;
+        }
         String resumeMemoryId = memoryId(resumeId);
         final int[] iterationCounter = {0};
         Consumer<CvReview> memoryAwareProgressCallback = review -> {
@@ -954,6 +986,41 @@ public class ResumeApplicationService {
                 .filter(lower::contains)
                 .map(skill -> SkillBO.builder().name(skill).level("experienced").build())
                 .toList();
+    }
+
+    /**
+     * 创建岗位匹配或简历优化的主业务调用记录。RAG 阶段会复用相同 traceId，
+     * 因此监测页面可以从一次业务调用直接展开其 HyDE、召回、融合和重排链路。
+     */
+    private void publishBusinessInvocationStarted(
+            String traceId, String sceneCode, String sessionId, String operationName, String input) {
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher != null) {
+            tracePublisher.started(traceId, sceneCode, sessionId, "career-rag", operationName, input);
+        }
+    }
+
+    private void publishBusinessInvocationCompleted(
+            String traceId,
+            String sceneCode,
+            String sessionId,
+            String operationName,
+            long startMillis,
+            String output,
+            Map<String, Object> metadata) {
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher != null) {
+            tracePublisher.completed(traceId, sceneCode, sessionId, "career-rag", operationName,
+                    startMillis, output, metadata);
+        }
+    }
+
+    private void publishBusinessInvocationFailed(
+            String traceId, String sceneCode, String sessionId, String operationName, long startMillis, Throwable error) {
+        AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+        if (tracePublisher != null) {
+            tracePublisher.failed(traceId, sceneCode, sessionId, "career-rag", operationName, startMillis, error);
+        }
     }
 
     private void publishTool(
