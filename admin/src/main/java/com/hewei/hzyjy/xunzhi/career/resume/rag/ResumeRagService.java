@@ -111,6 +111,20 @@ public class ResumeRagService {
     }
 
     public List<String> retrieveTemplates(String query, int limit, Long userId, Set<String> allowedResumeIds, boolean enabled) {
+        return retrieveTemplates(query, limit, userId, allowedResumeIds, enabled, null, "RESUME_TEMPLATE_RAG");
+    }
+
+    /**
+     * 在调用方提供主业务 Trace 时，将每个 RAG 阶段挂到该 Trace；未提供时保留独立调用的兼容行为。
+     */
+    public List<String> retrieveTemplates(
+            String query,
+            int limit,
+            Long userId,
+            Set<String> allowedResumeIds,
+            boolean enabled,
+            String businessTraceId,
+            String sceneCode) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
@@ -120,7 +134,7 @@ public class ResumeRagService {
                     "resume-template-retrieval", false);
             return List.of();
         }
-        String ragTraceId = beginRagStageTrace();
+        String ragTraceId = beginRagStageTrace(businessTraceId, sceneCode);
         Set<String> resumeScope = allowedResumeIds == null ? Set.of() : allowedResumeIds;
         Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
         List<String> allQueries = expandQueries(query);
@@ -162,11 +176,23 @@ public class ResumeRagService {
      * 通道失败都只降级该阶段，始终不突破调用方传入的候选简历范围。</p>
      */
     public List<ResumeRagMatch> retrieveResumeMatches(String query, int limit, Long userId, Set<String> allowedResumeIds, boolean enabled) {
+        return retrieveResumeMatches(query, limit, userId, allowedResumeIds, enabled, null, "JOB_MATCH_RAG");
+    }
+
+    /** 见 {@link #retrieveTemplates(String, int, Long, Set, boolean, String, String)} 的 Trace 关联约定。 */
+    public List<ResumeRagMatch> retrieveResumeMatches(
+            String query,
+            int limit,
+            Long userId,
+            Set<String> allowedResumeIds,
+            boolean enabled,
+            String businessTraceId,
+            String sceneCode) {
         if (query == null || query.isBlank() || allowedResumeIds == null || allowedResumeIds.isEmpty()) {
             return List.of();
         }
         long start = System.currentTimeMillis();
-        String ragTraceId = beginRagStageTrace();
+        String ragTraceId = beginRagStageTrace(businessTraceId, sceneCode);
         if (!enabled) {
             publishRecallMetric(query, userId, allowedResumeIds.size(), 0, start, "resume-job-match-retrieval", false);
             return List.of();
@@ -340,9 +366,11 @@ public class ResumeRagService {
         recordRagStage(stage, enabled, durationNanos / 1_000_000, inputCount, outputCount, cacheStatus, fallbackReason);
     }
 
-    private String beginRagStageTrace() {
-        String traceId = UUID.randomUUID().toString().substring(0, 8);
-        ragStageTrace.set(new RagStageTrace(traceId));
+    private String beginRagStageTrace(String businessTraceId, String sceneCode) {
+        String traceId = businessTraceId == null || businessTraceId.isBlank()
+                ? UUID.randomUUID().toString().substring(0, 8)
+                : businessTraceId;
+        ragStageTrace.set(new RagStageTrace(traceId, sceneCode));
         return traceId;
     }
 
@@ -352,17 +380,18 @@ public class ResumeRagService {
             return;
         }
         String stages = trace.stages.stream()
-                .map(stage -> "|  [*] %-10s enabled=%-5s costMs=%-6d input=%-3d output=%-3d cache=%s fallback=%s".formatted(
+                .map(stage -> "|  [*] %-10s 启用=%-5s 耗时毫秒=%-6d 输入数量=%-3d 输出数量=%-3d 缓存=%s 回退=%s".formatted(
                         stage.name, stage.enabled, stage.durationMs, stage.inputCount, stage.outputCount,
                         stage.cacheStatus, stage.fallbackReason))
                 .collect(Collectors.joining("\n"));
         log.info("""
 
-+==================== [RAG-TRACE {}] ====================+
-|  totalCostMs={}
++==================== [RAG调用 {}] ====================+
+|  总耗时毫秒={}
 {}
-+================== [RAG-TRACE END] ==================+
++================== [RAG调用结束] ==================+
 """, traceId, System.currentTimeMillis() - requestStartedAt, stages);
+        publishRagStageEvents(trace);
         ragStageTrace.remove();
     }
 
@@ -383,12 +412,53 @@ public class ResumeRagService {
                 stage, enabled, durationMs, inputCount, outputCount, cacheStatus, fallbackReason);
     }
 
+    private void publishRagStageEvents(RagStageTrace trace) {
+        AiTracePublisher publisher = tracePublisherProvider.getIfAvailable();
+        if (publisher == null) {
+            return;
+        }
+        for (int index = 0; index < trace.stages.size(); index++) {
+            RagStageMetric stage = trace.stages.get(index);
+            boolean success = !isRagStageFallback(stage.fallbackReason);
+            publisher.tool(new AiToolExecutionEvent(
+                    trace.traceId,
+                    null,
+                    null,
+                    trace.sceneCode,
+                    "RAG_STAGE_" + stage.name,
+                    "",
+                    "",
+                    success,
+                    stage.durationMs,
+                    index + 1,
+                    success ? null : stage.fallbackReason,
+                    Instant.now(),
+                    Map.of(
+                            "enabled", stage.enabled,
+                            "inputCount", stage.inputCount,
+                            "outputCount", stage.outputCount,
+                            "cacheStatus", stage.cacheStatus,
+                            "fallbackReason", stage.fallbackReason == null ? "" : stage.fallbackReason
+                    )
+            ));
+        }
+    }
+
+    private boolean isRagStageFallback(String reason) {
+        if (reason == null || reason.isBlank() || "阶段已关闭".equals(reason) || "稳定去重合并".equals(reason)) {
+            return false;
+        }
+        return reason.contains("失败") || reason.contains("回退") || "原始查询".equals(reason) || "空查询集".equals(reason);
+    }
+
     private static final class RagStageTrace {
         private final String traceId;
+        private final String sceneCode;
         private final List<RagStageMetric> stages = new ArrayList<>();
 
-        private RagStageTrace(String traceId) {
+        private RagStageTrace(String traceId, String sceneCode) {
             this.traceId = traceId;
+            this.sceneCode = sceneCode;
         }
     }
 
