@@ -118,12 +118,15 @@ public class RagExperimentService {
             List<RagExperimentDatasetItemDO> items = datasetService.listItems(experiment.getDatasetId());
             Set<String> allowedIds = items.stream().map(RagExperimentDatasetItemDO::getResumeId)
                     .map(String::valueOf).collect(Collectors.toCollection(LinkedHashSet::new));
+            String traceId = "rag-exp-" + experiment.getId();
             List<ResumeRagMatch> matches = resumeRagService.retrieveExperimentMatches(
                     experiment.getJobDescription(), experiment.getOwnerUserId(), allowedIds, options,
-                    "rag-exp-" + experiment.getId());
-            saveResults(experiment, matches, startedAt);
+                    traceId);
+            Map<String, Object> stageTrace = resumeRagService.consumeExperimentStageTrace(traceId);
+            int fallbackStageCount = (int) numeric(stageTrace.get("fallbackStageCount"));
+            saveResults(experiment, matches, startedAt, stageTrace, fallbackStageCount);
             RagExperimentMetrics metrics = calculateMetrics(experiment.getId(), options.topK());
-            experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, System.currentTimeMillis() - startedAt, matches.size())));
+            experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, System.currentTimeMillis() - startedAt, matches.size(), fallbackStageCount)));
             experiment.setStatus("COMPLETED");
             experiment.setCompletedAt(new Date());
             experimentMapper.updateById(experiment);
@@ -162,7 +165,8 @@ public class RagExperimentService {
                 : Math.max(0L, experiment.getCompletedAt().getTime() - experiment.getStartedAt().getTime());
         int returned = resultMapper.selectCount(Wrappers.lambdaQuery(RagExperimentResultDO.class)
                 .eq(RagExperimentResultDO::getExperimentId, experimentId)).intValue();
-        experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, duration, returned)));
+        int fallbackStageCount = (int) numeric(jsonMap(experiment.getMetricSnapshotJson()).get("fallbackStageCount"));
+        experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, duration, returned, fallbackStageCount)));
         experimentMapper.updateById(experiment);
     }
 
@@ -220,7 +224,8 @@ public class RagExperimentService {
                 "metricDeltas", deltas, "runtimeConfigChanged", !Objects.equals(left.getRuntimeConfigJson(), right.getRuntimeConfigJson()));
     }
 
-    private void saveResults(RagExperimentDO experiment, List<ResumeRagMatch> matches, long startedAt) {
+    private void saveResults(RagExperimentDO experiment, List<ResumeRagMatch> matches, long startedAt,
+                             Map<String, Object> stageTrace, int fallbackStageCount) {
         resultMapper.delete(Wrappers.lambdaQuery(RagExperimentResultDO.class).eq(RagExperimentResultDO::getExperimentId, experiment.getId()));
         int rank = 0;
         for (ResumeRagMatch match : matches) {
@@ -234,9 +239,12 @@ public class RagExperimentService {
             result.setRelevanceScore(java.math.BigDecimal.valueOf(match.score()));
             result.setRagScore(java.math.BigDecimal.valueOf(match.score()));
             result.setMatchedChunksJson(JSON.toJSONString(match.evidence()));
-            result.setStageTraceJson(JSON.toJSONString(Map.of("runtimeOptions", parseJson(experiment.getRuntimeConfigJson()), "fallbackStageCount", 0)));
+            result.setStageTraceJson(JSON.toJSONString(Map.of(
+                    "runtimeOptions", parseJson(experiment.getRuntimeConfigJson()),
+                    "trace", stageTrace == null ? Map.of() : stageTrace,
+                    "fallbackStageCount", fallbackStageCount)));
             result.setTotalDurationMs(Math.max(0, System.currentTimeMillis() - startedAt));
-            result.setFallbackStageCount(0);
+            result.setFallbackStageCount(fallbackStageCount);
             result.setResultSnapshotJson(JSON.toJSONString(Map.of("resumeId", resumeId, "rankNo", rank, "score", match.score(), "evidence", match.evidence())));
             resultMapper.insert(result);
         }
@@ -277,7 +285,8 @@ public class RagExperimentService {
         }
     }
 
-    private static Map<String, Object> metricSnapshot(RagExperimentMetrics metrics, long durationMs, int returnedCount) {
+    private static Map<String, Object> metricSnapshot(RagExperimentMetrics metrics, long durationMs, int returnedCount,
+                                                       int fallbackStageCount) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("recallAtK", metrics.recallAtK());
         snapshot.put("precisionAtK", metrics.precisionAtK());
@@ -290,7 +299,7 @@ public class RagExperimentService {
         snapshot.put("chunkHitAccuracy", null);
         snapshot.put("chunkHitAccuracyStatus", "未标注");
         snapshot.put("totalDurationMs", durationMs);
-        snapshot.put("fallbackStageCount", 0);
+        snapshot.put("fallbackStageCount", fallbackStageCount);
         return snapshot;
     }
 

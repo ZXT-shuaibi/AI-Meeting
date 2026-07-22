@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.CACHE_KEY_HYDE;
@@ -52,6 +53,11 @@ public class ResumeRagService {
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ThreadLocal<RagStageTrace> ragStageTrace = new ThreadLocal<>();
+    /**
+     * 仅用于实验调用的已完成阶段快照。实验服务在同一调用链结束后立即消费并移除，
+     * 不把业务请求的 Trace 长期保留在内存中，也不影响常规岗位匹配。
+     */
+    private final Map<String, Map<String, Object>> completedExperimentStageTraces = new ConcurrentHashMap<>();
     /**
      * 实验专用参数仅在当前检索线程存活期内可见。它绝不修改全局配置，且入口使用 finally 清理，
      * 防止线程池复用时将一次实验的开关泄漏给后续业务请求。
@@ -203,6 +209,18 @@ public class ResumeRagService {
         } finally {
             experimentRuntimeOptions.remove();
         }
+    }
+
+    /**
+     * 读取并删除某次 RAG 实验的阶段快照。返回空快照表示检索在生成 Trace 前已经异常，
+     * 调用方仍可保留失败状态，而不会将其误记为“未发生降级”。
+     */
+    public Map<String, Object> consumeExperimentStageTrace(String experimentTraceId) {
+        if (experimentTraceId == null || experimentTraceId.isBlank()) {
+            return Map.of();
+        }
+        Map<String, Object> trace = completedExperimentStageTraces.remove(experimentTraceId);
+        return trace == null ? Map.of() : trace;
     }
 
     /** 见 {@link #retrieveTemplates(String, int, Long, Set, boolean, String, String)} 的 Trace 关联约定。 */
@@ -417,8 +435,36 @@ public class ResumeRagService {
 {}
 +================== [RAG调用结束] ==================+
 """, traceId, System.currentTimeMillis() - requestStartedAt, stages);
+        Map<String, Object> traceSnapshot = toStageTraceSnapshot(trace, requestStartedAt);
+        if ("RAG_EXPERIMENT".equals(trace.sceneCode)) {
+            completedExperimentStageTraces.put(traceId, traceSnapshot);
+        }
         publishRagStageEvents(trace);
         ragStageTrace.remove();
+    }
+
+    private Map<String, Object> toStageTraceSnapshot(RagStageTrace trace, long requestStartedAt) {
+        List<Map<String, Object>> stages = trace.stages.stream().map(stage -> {
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("name", stage.name);
+            value.put("enabled", stage.enabled);
+            value.put("durationMs", stage.durationMs);
+            value.put("inputCount", stage.inputCount);
+            value.put("outputCount", stage.outputCount);
+            value.put("cacheStatus", stage.cacheStatus);
+            value.put("fallbackReason", stage.fallbackReason);
+            return value;
+        }).toList();
+        int fallbackCount = (int) trace.stages.stream()
+                .filter(stage -> isRagStageFallback(stage.fallbackReason))
+                .count();
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("traceId", trace.traceId);
+        snapshot.put("sceneCode", trace.sceneCode);
+        snapshot.put("totalDurationMs", Math.max(0L, System.currentTimeMillis() - requestStartedAt));
+        snapshot.put("fallbackStageCount", fallbackCount);
+        snapshot.put("stages", stages);
+        return snapshot;
     }
 
     private void recordRagStage(
