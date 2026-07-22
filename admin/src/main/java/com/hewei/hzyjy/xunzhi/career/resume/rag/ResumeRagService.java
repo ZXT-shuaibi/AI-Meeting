@@ -7,6 +7,7 @@ import com.hewei.hzyjy.xunzhi.career.config.CareerRagProperties;
 import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.raglab.model.RagExperimentRuntimeOptions;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -177,6 +178,21 @@ public class ResumeRagService {
      */
     public List<ResumeRagMatch> retrieveResumeMatches(String query, int limit, Long userId, Set<String> allowedResumeIds, boolean enabled) {
         return retrieveResumeMatches(query, limit, userId, allowedResumeIds, enabled, null, "JOB_MATCH_RAG");
+    }
+
+    /**
+     * RAG 实验室的检索入口。实验配置与业务 Trace 仅作用于当前调用，普通岗位匹配仍使用原有入口。
+     * 当前阶段先将 RAG 总开关、Top-K 和实验 Trace 接入既有稳定链路；其余细粒度开关会在内部阶段
+     * 逐项改为读取 {@link RagExperimentRuntimeOptions}，避免一次性改变线上召回行为。
+     */
+    public List<ResumeRagMatch> retrieveExperimentMatches(
+            String query, Long userId, Set<String> allowedResumeIds,
+            RagExperimentRuntimeOptions options, String experimentTraceId) {
+        if (options == null) {
+            throw new IllegalArgumentException("RAG 实验运行参数不能为空");
+        }
+        return retrieveResumeMatches(query, options.topK(), userId, allowedResumeIds,
+                options.ragEnabled(), experimentTraceId, "RAG_EXPERIMENT");
     }
 
     /** 见 {@link #retrieveTemplates(String, int, Long, Set, boolean, String, String)} 的 Trace 关联约定。 */
