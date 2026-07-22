@@ -47,6 +47,9 @@ public class RagExperimentDO extends BaseDO {
     /** 本次实验实际使用的评判规则 JSON 快照。 */
     private String judgementSnapshotJson;
 
+    /** 本次运行计算得到的核心检索指标快照；与配置、真值一起构成可复现实验记录。 */
+    private String metricSnapshotJson;
+
     /** 由关键配置生成的稳定指纹，用于快速识别同配置实验。 */
     private String configFingerprint;
 

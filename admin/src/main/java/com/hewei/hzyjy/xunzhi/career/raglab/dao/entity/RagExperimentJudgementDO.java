@@ -7,8 +7,6 @@ import com.hewei.hzyjy.xunzhi.common.database.BaseDO;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
-import java.math.BigDecimal;
-
 /**
  * 单份简历在 RAG 实验中的评判持久化对象。
  *
@@ -33,10 +31,16 @@ public class RagExperimentJudgementDO extends BaseDO {
     private Long resumeId;
 
     /** 按规则自动计算得到的原始评分。 */
-    private BigDecimal automaticScore;
+    private Integer automaticScore;
 
     /** 最终采用的评分；人工覆写后可与自动评分不同。 */
-    private BigDecimal finalScore;
+    private Integer finalScore;
+
+    /**
+     * 规则来源，例如 {@code SYSTEM_TAG_MATCH_V1} 或 {@code MANUAL_OVERRIDE}。
+     * 该字段独立于 JSON 快照保存，便于按规则版本筛选和审计历史实验。
+     */
+    private String ruleSource;
 
     /** 生成该评分时实际生效的规则 JSON 快照。 */
     private String ruleSnapshotJson;

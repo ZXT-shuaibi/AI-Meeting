@@ -52,6 +52,11 @@ public class ResumeRagService {
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ThreadLocal<RagStageTrace> ragStageTrace = new ThreadLocal<>();
+    /**
+     * 实验专用参数仅在当前检索线程存活期内可见。它绝不修改全局配置，且入口使用 finally 清理，
+     * 防止线程池复用时将一次实验的开关泄漏给后续业务请求。
+     */
+    private final ThreadLocal<RagExperimentRuntimeOptions> experimentRuntimeOptions = new ThreadLocal<>();
 
     public boolean enabled() {
         return ragProperties.isEnabled();
@@ -191,8 +196,13 @@ public class ResumeRagService {
         if (options == null) {
             throw new IllegalArgumentException("RAG 实验运行参数不能为空");
         }
-        return retrieveResumeMatches(query, options.topK(), userId, allowedResumeIds,
-                options.ragEnabled(), experimentTraceId, "RAG_EXPERIMENT");
+        experimentRuntimeOptions.set(options);
+        try {
+            return retrieveResumeMatches(query, options.topK(), userId, allowedResumeIds,
+                    options.ragEnabled(), experimentTraceId, "RAG_EXPERIMENT");
+        } finally {
+            experimentRuntimeOptions.remove();
+        }
     }
 
     /** 见 {@link #retrieveTemplates(String, int, Long, Set, boolean, String, String)} 的 Trace 关联约定。 */
@@ -216,9 +226,9 @@ public class ResumeRagService {
         Set<String> resumeScope = new LinkedHashSet<>(allowedResumeIds);
         Map<String, String> metadataFilters = userId == null ? Map.of() : Map.of(META_USER_ID, String.valueOf(userId));
         log.info("RAG阶段诊断 traceId={} 阶段=执行计划 RAG启用=true 候选简历数={} TopK={} HyDE启用={} 多查询启用={} 多查询视角=[技能技术栈,行业项目经验,同义表达] 向量召回启用={} BM25启用={} RRF融合启用={} Rerank启用={} Rerank供应商={} Rerank模型={}",
-                ragTraceId, resumeScope.size(), limit, ragProperties.isHydeEnabled(), ragProperties.isMultiQueryEnabled(),
-                ragProperties.isVectorEnabled(), ragProperties.isBm25Enabled(), ragProperties.isRrfEnabled(),
-                ragProperties.getRerank().isEnabled(), ragProperties.getRerank().getProvider(), ragProperties.getRerank().getModel());
+                ragTraceId, resumeScope.size(), limit, hydeEnabled(), multiQueryEnabled(),
+                coarseVectorEnabled() || fineVectorEnabled(), bm25Enabled(), rrfEnabled(),
+                rerankEnabled(), ragProperties.getRerank().getProvider(), ragProperties.getRerank().getModel());
         long queryExpansionStart = System.currentTimeMillis();
         List<String> allQueries = new ArrayList<>();
         allQueries.add(query);
@@ -238,7 +248,7 @@ public class ResumeRagService {
             candidateResumeIds = resumeScope;
         }
         log.info("RAG阶段诊断 traceId={} 阶段=向量粗召回 耗时毫秒={} 向量启用={} 粗召回阈值={} 粗召回上限={} 候选结果数={} 发生全量兜底={}",
-                ragTraceId, System.currentTimeMillis() - coarseRecallStart, ragProperties.isVectorEnabled(),
+                ragTraceId, System.currentTimeMillis() - coarseRecallStart, coarseVectorEnabled(),
                 ragProperties.getVectorMinScoreCoarse(), ragProperties.getCoarseRecallLimit(), candidateResumeIds.size(),
                 candidateResumeIds.size() == resumeScope.size());
         log.info("RAG 粗召回完成：候选简历数={}，候选简历ID={}", candidateResumeIds.size(), candidateResumeIds);
@@ -249,8 +259,8 @@ public class ResumeRagService {
                 metadataFilters,
                 Math.max(limit, 1) * ragProperties.getFineRecallMultiplier());
         log.info("RAG阶段诊断 traceId={} 阶段=细召回与融合 耗时毫秒={} 向量启用={} BM25启用={} RRF启用={} 细召回阈值={} 命中片段数={}",
-                ragTraceId, System.currentTimeMillis() - fineRecallStart, ragProperties.isVectorEnabled(),
-                ragProperties.isBm25Enabled(), ragProperties.isRrfEnabled(), ragProperties.getVectorMinScoreFine(), chunks.size());
+                ragTraceId, System.currentTimeMillis() - fineRecallStart, fineVectorEnabled(),
+                bm25Enabled(), rrfEnabled(), ragProperties.getVectorMinScoreFine(), chunks.size());
         log.info("RAG 细召回与RRF融合完成：命中片段数={}", chunks.size());
         Map<String, List<RetrievedChunk>> byResume = chunks.stream()
                 .collect(Collectors.groupingBy(RetrievedChunk::resumeId, LinkedHashMap::new, Collectors.toList()));
@@ -272,7 +282,7 @@ public class ResumeRagService {
         long rerankStart = System.currentTimeMillis();
         List<ResumeRagMatch> matches = rerankResumeMatches(query, preRerankMatches, limit);
         log.info("RAG阶段诊断 traceId={} 阶段=Rerank重排 耗时毫秒={} Rerank启用={} 供应商={} 模型={} 输入简历数={} 输出简历数={}",
-                ragTraceId, System.currentTimeMillis() - rerankStart, ragProperties.getRerank().isEnabled(),
+                ragTraceId, System.currentTimeMillis() - rerankStart, rerankEnabled(),
                 ragProperties.getRerank().getProvider(), ragProperties.getRerank().getModel(), preRerankMatches.size(), matches.size());
         log.info("RAG 岗位匹配排序完成：返回简历数={}，排序简历ID={}", matches.size(), matches.stream().map(ResumeRagMatch::resumeId).toList());
         finishRagStageTrace(ragTraceId, start);
@@ -293,7 +303,7 @@ public class ResumeRagService {
 
     private String generateHyDE(String query) {
         long startedAt = System.nanoTime();
-        if (!ragProperties.isHydeEnabled()) {
+        if (!hydeEnabled()) {
             logRagStage("HyDE", false, startedAt, 1, 0, "未使用", "阶段已关闭");
             return null;
         }
@@ -323,7 +333,7 @@ public class ResumeRagService {
 
     private List<String> generateMultiQueries(String query) {
         long startedAt = System.nanoTime();
-        if (!ragProperties.isMultiQueryEnabled()) {
+        if (!multiQueryEnabled()) {
             logRagStage("Multi-query", false, startedAt, 1, 0, "未使用", "阶段已关闭");
             return List.of();
         }
@@ -488,10 +498,53 @@ public class ResumeRagService {
             String fallbackReason) {
     }
 
+    private boolean hydeEnabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.isHydeEnabled() : options.hydeEnabled();
+    }
+
+    private boolean multiQueryEnabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.isMultiQueryEnabled() : options.multiQueryEnabled();
+    }
+
+    private boolean coarseVectorEnabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.isVectorEnabled() : options.coarseVectorEnabled();
+    }
+
+    private boolean fineVectorEnabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.isVectorEnabled() : options.fineVectorEnabled();
+    }
+
+    private boolean bm25Enabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.isBm25Enabled() : options.bm25Enabled();
+    }
+
+    private boolean rrfEnabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.isRrfEnabled() : options.rrfEnabled();
+    }
+
+    private boolean rerankEnabled() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        return options == null ? ragProperties.getRerank().isEnabled() : options.rerankEnabled();
+    }
+
+    private Map<String, Double> chunkWeights() {
+        RagExperimentRuntimeOptions options = experimentRuntimeOptions.get();
+        if (options != null) {
+            return options.chunkWeights();
+        }
+        return ragProperties.getChunkWeights() == null ? Map.of() : ragProperties.getChunkWeights();
+    }
+
     private Set<String> hierarchicalCoarseSearch(List<String> queries, int targetLimit, Set<String> resumeScope, Map<String, String> metadataFilters) {
         long startedAt = System.nanoTime();
         Set<String> resumeIds = new LinkedHashSet<>();
-        if (!ragProperties.isVectorEnabled()) {
+        if (!coarseVectorEnabled()) {
             log.info("RAG 向量粗召回已关闭，将使用所选简历范围作为候选集。");
             logRagStage("粗向量召回", false, startedAt, queries.size(), 0, "不适用", "阶段已关闭");
             return resumeIds;
@@ -540,7 +593,7 @@ public class ResumeRagService {
         int vectorOutputCount = 0;
         int bm25OutputCount = 0;
         for (String query : queries) {
-            if (ragProperties.isVectorEnabled()) {
+            if (fineVectorEnabled()) {
                 long vectorStartedAt = System.nanoTime();
                 try {
                     List<ResumeVectorMatch> vectorMatches = vectorStore.search(
@@ -564,7 +617,7 @@ public class ResumeRagService {
                     vectorDurationNanos += System.nanoTime() - vectorStartedAt;
                 }
             }
-            if (ragProperties.isBm25Enabled()) {
+            if (bm25Enabled()) {
                 long bm25StartedAt = System.nanoTime();
                 try {
                     List<RetrievedChunk> bm25Ranked = bm25Recall(query, candidateResumeIds, metadataFilters, limit);
@@ -577,17 +630,17 @@ public class ResumeRagService {
                 }
             }
         }
-        logRagStageDuration("细向量召回", ragProperties.isVectorEnabled(), vectorDurationNanos,
+        logRagStageDuration("细向量召回", fineVectorEnabled(), vectorDurationNanos,
                 queries.size(), vectorOutputCount, "不适用", "");
-        logRagStageDuration("BM25召回", ragProperties.isBm25Enabled(), bm25DurationNanos,
+        logRagStageDuration("BM25召回", bm25Enabled(), bm25DurationNanos,
                 queries.size(), bm25OutputCount, "不适用", "");
         long fusionStartedAt = System.nanoTime();
-        List<RetrievedChunk> fused = ragProperties.isRrfEnabled()
+        List<RetrievedChunk> fused = rrfEnabled()
                 ? rrfFusionChunks(rankedLists, ragProperties.getRrfK(), limit)
                 : mergeRankedChunksWithoutRrf(rankedLists, limit);
-        logRagStage("RRF融合", ragProperties.isRrfEnabled(), fusionStartedAt,
-                rankedLists.size(), fused.size(), "不适用", ragProperties.isRrfEnabled()
-                        ? "chunkWeights=" + ragProperties.getChunkWeights()
+        logRagStage("RRF融合", rrfEnabled(), fusionStartedAt,
+                rankedLists.size(), fused.size(), "不适用", rrfEnabled()
+                        ? "chunkWeights=" + chunkWeights()
                         : "稳定去重合并");
         return fused;
     }
@@ -641,9 +694,7 @@ public class ResumeRagService {
     }
 
     private double chunkWeight(String chunkType) {
-        Double configuredWeight = ragProperties.getChunkWeights() == null
-                ? null
-                : ragProperties.getChunkWeights().get(chunkType);
+        Double configuredWeight = chunkWeights().get(chunkType);
         if (configuredWeight == null) {
             return 1.0;
         }
@@ -668,7 +719,7 @@ public class ResumeRagService {
 
     private List<ResumeRagMatch> rerankResumeMatches(String query, List<ResumeRagMatch> matches, int limit) {
         int resultLimit = Math.max(1, limit);
-        if (!ragProperties.getRerank().isEnabled()) {
+        if (!rerankEnabled()) {
             return matches.stream().limit(resultLimit).toList();
         }
         int candidateLimit = Math.max(resultLimit, resultLimit * ragProperties.getFineRecallMultiplier());
@@ -712,10 +763,10 @@ public class ResumeRagService {
     private List<String> rerank(String query, List<String> candidates, int limit) {
         long startedAt = System.nanoTime();
         if (candidates.isEmpty()) {
-            logRagStage("Rerank", ragProperties.getRerank().isEnabled(), startedAt, 0, 0, "不适用", "无候选");
+            logRagStage("Rerank", rerankEnabled(), startedAt, 0, 0, "不适用", "无候选");
             return List.of();
         }
-        if (!ragProperties.getRerank().isEnabled()) {
+        if (!rerankEnabled()) {
             List<String> result = candidates.stream().limit(limit).toList();
             logRagStage("Rerank", false, startedAt, candidates.size(), result.size(), "不适用", "阶段已关闭");
             return result;
