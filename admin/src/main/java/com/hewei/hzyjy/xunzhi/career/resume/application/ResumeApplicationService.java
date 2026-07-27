@@ -3,6 +3,8 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 import com.alibaba.fastjson2.JSON;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
+import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCoordinator;
+import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStartCommand;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvReview;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.CareerInterviewExecutionBridge;
 import com.hewei.hzyjy.xunzhi.career.agent.interview.InterviewPlan;
@@ -85,6 +87,12 @@ public class ResumeApplicationService {
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ResumeObjectStorage resumeObjectStorage;
     private final RagResumeAutoTagService ragResumeAutoTagService;
+
+    /**
+     * Harness 运行审计为旁路能力：本地旧测试和未执行迁移脚本的环境均不应因此阻断简历优化主流程。
+     */
+    @Autowired(required = false)
+    private AgentRunCoordinator agentRunCoordinator;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
     @Autowired
@@ -266,12 +274,25 @@ public class ResumeApplicationService {
         boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
         String optimizationTraceId = UUID.randomUUID().toString();
         String optimizationSessionId = "resume-optimization:" + resumeId;
+        String agentRunId = startAgentRun(
+                "RESUME_OPTIMIZATION",
+                "RESUME_TAILOR",
+                userId,
+                String.valueOf(resumeId),
+                optimizationSessionId,
+                optimizationTraceId,
+                ragEnabled,
+                "JD长度=" + jobDescription.length(),
+                "rag=" + ragEnabled + ";templateTopK=3"
+        );
         publishBusinessInvocationStarted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId, "简历优化 RAG", jobDescription);
         List<String> templates;
         try {
+            recordAgentRunStage(agentRunId, "RAG_RETRIEVE", "开始检索简历优化证据", Map.of("ragEnabled", ragEnabled));
             templates = resumeRagService.retrieveTemplates(
                     jobDescription, 3, userId, Set.of(String.valueOf(resumeId)), ragEnabled,
                     optimizationTraceId, "RESUME_TAILOR");
+            recordAgentRunStage(agentRunId, "RAG_RETRIEVE", "简历优化证据检索完成", Map.of("templateCount", templates.size()));
             publishBusinessInvocationCompleted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId,
                     "简历优化 RAG", optimizationStart, "templates=" + templates.size(), Map.of(
                             "ragRequested", true,
@@ -281,6 +302,7 @@ public class ResumeApplicationService {
                             "resultCount", templates.size()
                     ));
         } catch (RuntimeException ex) {
+            failAgentRun(agentRunId, "RAG 检索失败：" + ex.getMessage(), Map.of("stage", "RAG_RETRIEVE"));
             publishBusinessInvocationFailed(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId,
                     "简历优化 RAG", optimizationStart, ex);
             throw ex;
@@ -305,10 +327,19 @@ public class ResumeApplicationService {
                 progressCallback.accept(review);
             }
         };
-        CvOptimizationResult result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, memoryAwareProgressCallback);
+        CvOptimizationResult result;
+        try {
+            recordAgentRunStage(agentRunId, "AGENT_OPTIMIZE", "开始执行简历优化 Agent", Map.of());
+            result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, memoryAwareProgressCallback);
+            recordAgentRunStage(agentRunId, "AGENT_OPTIMIZE", "简历优化 Agent 执行完成", Map.of("iterations", result.iterations()));
+        } catch (RuntimeException ex) {
+            failAgentRun(agentRunId, "简历优化 Agent 执行失败：" + ex.getMessage(), Map.of("stage", "AGENT_OPTIMIZE"));
+            throw ex;
+        }
         CvBO latest = result.cv() == null ? cv : result.cv().toBuilder().id(resumeId).userId(userId).build();
         if (result.scoreGatePassed()) {
             resumeStore.save(latest);
+            recordAgentRunStage(agentRunId, "PERSIST", "优化后的简历已持久化", Map.of("scoreGatePassed", true));
             embeddedResumeIds.remove(resumeId);
             ensureResumeEmbedding(latest);
         }
@@ -339,7 +370,62 @@ public class ResumeApplicationService {
                 Map.of("指标名称", "简历优化完成", "RAG开关", ragEnabled, "RAG来源", ragOverride == null ? "后端默认配置" : "前端单次选择", "用户编号", userId, "简历编号", resumeId,
                         "总耗时毫秒", durationMs, "迭代次数", response.iterations(),
                         "评分达标", Boolean.TRUE.equals(response.scoreGatePassed())));
+        succeedAgentRun(agentRunId, "简历优化完成", Map.of(
+                "iterations", response.iterations(),
+                "scoreGatePassed", Boolean.TRUE.equals(response.scoreGatePassed()),
+                "ragEnabled", ragEnabled
+        ));
         return response;
+    }
+
+    /** 记录运行总账失败时只告警，确保 Harness 的观测能力不会反向影响用户的简历优化结果。 */
+    private String startAgentRun(
+            String businessType, String sceneCode, Long userId, String businessId, String sessionId, String traceId,
+            boolean ragEnabled, String inputSummary, String configFingerprint) {
+        if (agentRunCoordinator == null) {
+            return null;
+        }
+        try {
+            return agentRunCoordinator.start(new AgentRunStartCommand(
+                    businessType, sceneCode, userId, businessId, sessionId, traceId,
+                    ragEnabled, inputSummary, configFingerprint));
+        } catch (RuntimeException ex) {
+            log.warn("Harness 运行总账创建失败，已跳过审计但继续简历优化。traceId={}", traceId, ex);
+            return null;
+        }
+    }
+
+    private void recordAgentRunStage(String runId, String stageCode, String message, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.stage(runId, stageCode, message, metadata);
+        } catch (RuntimeException ex) {
+            log.warn("Harness 阶段事件写入失败，已跳过。runId={}, stage={}", runId, stageCode, ex);
+        }
+    }
+
+    private void succeedAgentRun(String runId, String summary, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.succeed(runId, summary, metadata);
+        } catch (RuntimeException ex) {
+            log.warn("Harness 成功终态写入失败，已跳过。runId={}", runId, ex);
+        }
+    }
+
+    private void failAgentRun(String runId, String message, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.fail(runId, message, metadata);
+        } catch (RuntimeException ignored) {
+            // 失败路径不能因二次审计失败掩盖原始业务异常。
+        }
     }
 
     public List<ResumeOptimizationHistoryResult> listOptimizationHistory(Long userId) {

@@ -8,6 +8,8 @@ import com.hewei.hzyjy.xunzhi.career.agent.support.AgentResponseParser;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
+import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCoordinator;
+import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStartCommand;
 import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContext;
 import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContextProvider;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewReviewFeedbackRespDTO;
@@ -21,6 +23,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -32,10 +35,20 @@ public class InterviewReportAiReviewer {
 
     private final AiGateway aiGateway;
     private InterviewHistoryContextProvider interviewHistoryContextProvider;
+    private AgentRunCoordinator agentRunCoordinator;
 
     @Autowired
     void setInterviewHistoryContextProvider(InterviewHistoryContextProvider interviewHistoryContextProvider) {
         this.interviewHistoryContextProvider = interviewHistoryContextProvider;
+    }
+
+    /**
+     * 运行审计是可选旁路能力。旧环境尚未执行 Harness 建表脚本时，面试报告仍会继续生成，
+     * 不能因为审计表不可用而破坏既有 AI 报告与本地兜底逻辑。
+     */
+    @Autowired(required = false)
+    void setAgentRunCoordinator(AgentRunCoordinator agentRunCoordinator) {
+        this.agentRunCoordinator = agentRunCoordinator;
     }
 
     public InterviewReviewFeedbackRespDTO review(
@@ -44,10 +57,28 @@ public class InterviewReportAiReviewer {
             List<InterviewTurnLog> turns,
             RadarChartDTO radarChart,
             String interviewSuggestions) {
+        return review(null, sessionId, interviewDirection, turns, radarChart, interviewSuggestions);
+    }
+
+    /**
+     * 生成一次 AI 面试报告，并仅记录轮次数、阶段结果等脱敏运行摘要。
+     * 模型返回无效内容时仍返回 null，由现有调用方生成本地兜底报告。
+     */
+    public InterviewReviewFeedbackRespDTO review(
+            Long userId,
+            String sessionId,
+            String interviewDirection,
+            List<InterviewTurnLog> turns,
+            RadarChartDTO radarChart,
+            String interviewSuggestions) {
+        String runId = startHarnessRun(userId, sessionId, turns);
         try {
             InterviewHistoryContext historyContext = interviewHistoryContextProvider == null
                     ? InterviewHistoryContext.empty()
                     : interviewHistoryContextProvider.load(sessionId);
+            stageHarnessRun(runId, "HISTORY_CONTEXT", "面试历史上下文已投影", Map.of(
+                    "resultCount", historyContext.available() ? historyContext.recentTurns().size() : 0));
+            stageHarnessRun(runId, "MODEL_CALL", "开始生成 AI 面试报告", Map.of());
             AiGatewayResult result = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("interview-report-review")
                     .sessionId(sessionId)
@@ -55,15 +86,73 @@ public class InterviewReportAiReviewer {
                     .userPrompt(buildPrompt(interviewDirection, turns, radarChart, interviewSuggestions, historyContext))
                     .build());
             if (result == null || result.degraded() || StrUtil.isBlank(result.content())) {
+                failHarnessRun(runId, "报告模型未返回可用内容", Map.of(
+                        "degraded", result != null && result.degraded()));
                 return null;
             }
-            return AgentResponseParser.jsonObject(result.content())
+            InterviewReviewFeedbackRespDTO feedback = AgentResponseParser.jsonObject(result.content())
                     .map(this::toFeedback)
                     .filter(this::isValidChineseFeedback)
                     .orElse(null);
+            if (feedback == null) {
+                failHarnessRun(runId, "报告模型返回内容未通过结构化中文反馈校验", Map.of());
+                return null;
+            }
+            stageHarnessRun(runId, "MODEL_CALL", "AI 面试报告已通过结构化校验", Map.of("resultCount", 1));
+            succeedHarnessRun(runId, "AI 面试报告已生成", Map.of("resultCount", 1));
+            return feedback;
         } catch (Exception ex) {
+            failHarnessRun(runId, "AI 面试报告生成异常", Map.of());
             log.warn("生成 AI 面试报告失败，sessionId={}", sessionId, ex);
             return null;
+        }
+    }
+
+    private String startHarnessRun(Long userId, String sessionId, List<InterviewTurnLog> turns) {
+        if (agentRunCoordinator == null) {
+            return null;
+        }
+        try {
+            int turnCount = turns == null ? 0 : turns.size();
+            return agentRunCoordinator.start(new AgentRunStartCommand(
+                    "INTERVIEW_REPORT", "INTERVIEW_REPORT", userId, sessionId, sessionId, null,
+                    false, "面试轮次数=" + turnCount, "historyProjection=true;promptLimit=" + MAX_PROMPT_LENGTH));
+        } catch (Exception ex) {
+            log.warn("Harness 面试报告运行审计创建失败，继续生成报告。sessionId={}", sessionId, ex);
+            return null;
+        }
+    }
+
+    private void stageHarnessRun(String runId, String stageCode, String message, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.stage(runId, stageCode, message, metadata);
+        } catch (Exception ex) {
+            log.warn("Harness 面试报告阶段审计写入失败，继续生成报告。运行编号={} 阶段={}", runId, stageCode, ex);
+        }
+    }
+
+    private void succeedHarnessRun(String runId, String resultSummary, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.succeed(runId, resultSummary, metadata);
+        } catch (Exception ex) {
+            log.warn("Harness 面试报告成功审计写入失败。运行编号={}", runId, ex);
+        }
+    }
+
+    private void failHarnessRun(String runId, String errorSummary, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.fail(runId, errorSummary, metadata);
+        } catch (Exception ex) {
+            log.warn("Harness 面试报告失败审计写入失败。运行编号={}", runId, ex);
         }
     }
 
