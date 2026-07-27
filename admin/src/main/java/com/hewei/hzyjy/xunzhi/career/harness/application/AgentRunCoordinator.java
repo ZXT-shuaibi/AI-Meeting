@@ -9,6 +9,7 @@ import com.hewei.hzyjy.xunzhi.career.harness.dao.mapper.AgentRunMapper;
 import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStartCommand;
 import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStatus;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
@@ -27,6 +28,10 @@ public class AgentRunCoordinator {
 
     private final AgentRunMapper agentRunMapper;
     private final AgentRunEventMapper agentRunEventMapper;
+
+    /** Outbox 未建表或外部桥未配置时不得影响主任务完成。 */
+    @Autowired(required = false)
+    private AgentNotificationOutboxService notificationOutboxService;
 
     public String start(AgentRunStartCommand command) {
         String runId = "agent-run-" + UUID.randomUUID();
@@ -56,6 +61,7 @@ public class AgentRunCoordinator {
 
     public void succeed(String runId, String resultSummary, Map<String, Object> metadata) {
         finish(runId, AgentRunStatus.SUCCEEDED, resultSummary, null, metadata);
+        enqueueCompletionNotification(runId);
     }
 
     public void fail(String runId, String errorMessage, Map<String, Object> metadata) {
@@ -93,5 +99,18 @@ public class AgentRunCoordinator {
         event.setMetadataJson(JSON.toJSONString(metadata == null ? Map.of() : metadata));
         event.setOccurredAt(new Date());
         agentRunEventMapper.insert(event);
+    }
+
+    private void enqueueCompletionNotification(String runId) {
+        if (notificationOutboxService == null || runId == null) return;
+        try {
+            AgentRunDO run = agentRunMapper.selectList(Wrappers.<AgentRunDO>lambdaQuery()
+                    .eq(AgentRunDO::getRunId, runId).last("LIMIT 1")).stream().findFirst().orElse(null);
+            notificationOutboxService.enqueueCompletion(run);
+        } catch (Exception ex) {
+            // 外部通知是可选副作用；运行总账和业务结果已经成功时绝不反向失败。
+            org.slf4j.LoggerFactory.getLogger(AgentRunCoordinator.class)
+                    .warn("Agent 完成通知入队失败，保留主运行成功状态。runId={}", runId, ex);
+        }
     }
 }
