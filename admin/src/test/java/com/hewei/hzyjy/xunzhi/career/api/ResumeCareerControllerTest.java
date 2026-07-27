@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -47,7 +48,7 @@ class ResumeCareerControllerTest {
         UserContext user = new UserContext(7L, "candidate");
         doAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            Consumer<CvReview> callback = invocation.getArgument(3, Consumer.class);
+            Consumer<CvReview> callback = invocation.getArgument(4, Consumer.class);
             callback.accept(new CvReview(0.78, "feedback-1"));
             callback.accept(new CvReview(0.84, "feedback-2"));
             return CvOptimizationResult.builder()
@@ -58,7 +59,7 @@ class ResumeCareerControllerTest {
                             new CvReview(0.84, "feedback-2")
                     ))
                     .build();
-        }).when(service).optimize(eq(7L), eq(11L), eq("Java backend JD"), any());
+        }).when(service).optimizeWithRagOverride(eq(7L), eq(11L), eq("Java backend JD"), isNull(), any());
 
         SseEmitter emitter = controller.optimizeStream(11L, request, user);
 
@@ -69,7 +70,7 @@ class ResumeCareerControllerTest {
 
         taskExecutor.runNext();
 
-        verify(service).optimize(eq(7L), eq(11L), eq("Java backend JD"), any());
+        verify(service).optimizeWithRagOverride(eq(7L), eq(11L), eq("Java backend JD"), isNull(), any());
         assertEquals(List.of("START", "ITERATION", "ITERATION", "COMPLETE"), controller.eventNames());
         assertEquals("PROCESSING", ((Map<?, ?>) controller.eventData().get(1)).get("status"));
         assertEquals(0.78, ((Map<?, ?>) controller.eventData().get(1)).get("score"));
@@ -84,7 +85,7 @@ class ResumeCareerControllerTest {
         ResumeOptimizeReqDTO request = new ResumeOptimizeReqDTO();
         request.setJobDescription("Java backend JD");
         UserContext user = new UserContext(7L, "candidate");
-        when(service.optimize(eq(7L), eq(11L), eq("Java backend JD"), any()))
+        when(service.optimizeWithRagOverride(eq(7L), eq(11L), eq("Java backend JD"), isNull(), any()))
                 .thenThrow(new IllegalStateException("model unavailable"));
 
         controller.optimizeStream(11L, request, user);

@@ -120,8 +120,11 @@ class InterviewRecordControllerPressureTest {
                 )
         );
 
-        assertTrue(successResponses > 0);
-        assertTrue(failedResponses > 0);
+        // 收尾接口对“已有同会话正在处理”按幂等成功返回，客户端无需把锁竞争当作错误。
+        assertEquals(concurrency, successResponses);
+        assertEquals(0, failedResponses);
+        assertTrue(successExec.get() > 0);
+        assertTrue(rejectedExec.get() > 0);
         assertEquals(concurrency, successResponses + failedResponses);
         assertEquals(concurrency, successExec.get() + rejectedExec.get());
         verify(interviewRecordService, times(concurrency)).saveInterviewRecordFromRedis("session-record-1", 7007L);

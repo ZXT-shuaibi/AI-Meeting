@@ -40,7 +40,9 @@ class BusinessAgentResolverTest {
         agentProperties.setId(8L);
         agentProperties.setAgentName("面试出题官");
         when(agentPropertiesLoader.getByAgentName("不存在的出题官")).thenReturn(null);
-        when(agentPropertiesLoader.getByAgentName("面试出题官")).thenReturn(agentProperties);
+        // 内置兜底名称以场景编码为准，避免测试依赖数据库中可变的展示名称。
+        when(agentPropertiesLoader.getByAgentName(
+                BusinessAgentScene.INTERVIEW_QUESTION_EXTRACTION.getDefaultAgentName())).thenReturn(agentProperties);
 
         BusinessAgentResolver resolver = new BusinessAgentResolver(properties, agentPropertiesLoader);
         AgentPropertiesDO resolved = resolver.resolveRequired(BusinessAgentScene.INTERVIEW_QUESTION_EXTRACTION);

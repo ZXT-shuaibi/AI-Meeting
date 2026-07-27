@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 class InterviewQuestionExtractionServiceTest {
 
     @Test
-    void shouldFailWhenWorkflowFallsBackToSmallTalkInsteadOfQuestions() throws Exception {
+    void shouldUseLocalFallbackQuestionsWhenWorkflowReturnsOnlySmallTalk() throws Exception {
         BusinessAgentResolver businessAgentResolver = mock(BusinessAgentResolver.class);
         XingChenAIClient xingChenAIClient = mock(XingChenAIClient.class);
         InterviewAiInvoker interviewAiInvoker = mock(InterviewAiInvoker.class);
@@ -85,16 +85,16 @@ class InterviewQuestionExtractionServiceTest {
 
         InterviewQuestionRespDTO response = service.extractInterviewQuestions(request);
 
-        assertEquals(0, response.getIsSuccess());
-        assertTrue(response.getErrorMessage().contains("smallTalk"));
+        assertEquals(1, response.getIsSuccess());
+        assertEquals(3, response.getQuestionCount());
         verify(interviewQuestionService).createFromAIResponse(
                 eq(request),
                 any(),
                 any(),
                 eq(null)
         );
-        verify(interviewQuestionCacheService, never()).cacheInterviewQuestions(eq("session-1"), any());
-        verify(interviewQuestionCacheService, never()).initInterviewFlow(eq("session-1"), any());
+        verify(interviewQuestionCacheService).cacheInterviewQuestions(eq("session-1"), any());
+        verify(interviewQuestionCacheService).initInterviewFlow("session-1", 3);
         verify(interviewAiSessionLockService).release(heavyLock);
     }
 }

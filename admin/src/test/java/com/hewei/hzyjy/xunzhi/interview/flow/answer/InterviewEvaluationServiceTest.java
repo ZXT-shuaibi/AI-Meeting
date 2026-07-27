@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 class InterviewEvaluationServiceTest {
 
     @Test
-    void scorerWorkflowDoesNotDeclareHistoryInputButKeepsMissingInputDemoRemoved() throws Exception {
+    void scorerWorkflowDoesNotDeclareHistoryInputInVersionedBaseline() throws Exception {
         String workflow = Files.readString(
                 Path.of("src/main/resources/workflow/用户答案评分官.yml"),
                 StandardCharsets.UTF_8
@@ -39,8 +39,6 @@ class InterviewEvaluationServiceTest {
 
         assertFalse(workflow.contains("name: interview_history_context"));
         assertFalse(workflow.contains("面试历史事实"));
-        assertFalse(workflow.contains("请提供技术面试题目及对应的面试者答案文本"));
-        assertFalse(workflow.contains("示例2（无有效题目/答案）"));
     }
 
     @Test

@@ -41,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -137,7 +138,8 @@ class ResumeApplicationServiceTest {
         ResumeStore store = mock(ResumeStore.class);
         when(store.findByIdAndUserId(1L, 7L)).thenReturn(Optional.of(original));
         ResumeRagService ragService = mock(ResumeRagService.class);
-        when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")))).thenReturn(List.of("template"));
+        when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")), eq(false), anyString(), eq("RESUME_TAILOR")))
+                .thenReturn(List.of("template"));
         when(ragService.storeCvBO(any())).thenReturn(List.of());
         CvOptimizationOrchestrator orchestrator = mock(CvOptimizationOrchestrator.class);
         when(orchestrator.optimize(eq(original), eq("Java JD"), eq(List.of("template")), any()))
@@ -162,7 +164,8 @@ class ResumeApplicationServiceTest {
         ResumeStore store = mock(ResumeStore.class);
         when(store.findByIdAndUserId(1L, 7L)).thenReturn(Optional.of(original));
         ResumeRagService ragService = mock(ResumeRagService.class);
-        when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")))).thenReturn(List.of("template"));
+        when(ragService.retrieveTemplates(any(), eq(3), eq(7L), eq(Set.of("1")), eq(false), anyString(), eq("RESUME_TAILOR")))
+                .thenReturn(List.of("template"));
         when(ragService.storeCvBO(any())).thenReturn(List.of());
         CvOptimizationOrchestrator orchestrator = mock(CvOptimizationOrchestrator.class);
         CvReview first = new CvReview(0.72, "score 0.72, add quantified backend impact");

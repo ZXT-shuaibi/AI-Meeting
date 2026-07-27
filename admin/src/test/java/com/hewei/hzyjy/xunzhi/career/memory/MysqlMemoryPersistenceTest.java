@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -44,6 +45,8 @@ class MysqlMemoryPersistenceTest {
         ArgumentCaptor<CareerMemoryMessageDO> saved = ArgumentCaptor.forClass(CareerMemoryMessageDO.class);
         verify(messageMapper).insert(saved.capture());
         when(messageMapper.selectList(any())).thenReturn(List.of(saved.getValue()));
+        // add 阶段会预热热缓存并读取一次冷存储；只校验过期后的恢复行为。
+        clearInvocations(messageMapper);
 
         tickerNanos.addAndGet(Duration.ofMinutes(31).toNanos());
 

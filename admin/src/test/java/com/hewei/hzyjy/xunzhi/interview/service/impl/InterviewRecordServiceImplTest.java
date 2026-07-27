@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,20 +103,18 @@ class InterviewRecordServiceImplTest {
         existingRecord.setUserId(1001L);
         existingRecord.setSessionId("interview-session-1");
         existingRecord.setCreateTime(new Date(System.currentTimeMillis() - 30_000));
-        when(mapper.selectOne(any())).thenReturn(null, null, existingRecord);
+        when(mapper.selectOne(any())).thenReturn(null, existingRecord);
         when(mapper.insert(any(InterviewRecordDO.class))).thenReturn(1);
         when(mapper.updateById(any(InterviewRecordDO.class))).thenReturn(1);
 
         service.saveInterviewRecordFromRedis("interview-session-1", 1001L);
 
-        InOrder inOrder = inOrder(ownershipService, mapper, sessionService);
-        inOrder.verify(ownershipService).requireOwnedSession("interview-session-1", 1001L);
-        inOrder.verify(mapper).selectOne(any());
-        inOrder.verify(ownershipService).requireOwnedSession("interview-session-1", 1001L);
+        // 收尾入口、首次快照和结束后的最终快照均需校验归属，防止并发重试绕过用户隔离。
+        verify(ownershipService, times(3)).requireOwnedSession("interview-session-1", 1001L);
+        InOrder inOrder = inOrder(mapper, sessionService);
         inOrder.verify(mapper).selectOne(any());
         inOrder.verify(mapper).insert(any(InterviewRecordDO.class));
         inOrder.verify(sessionService).finishSession("interview-session-1", 1001L);
-        inOrder.verify(ownershipService).requireOwnedSession("interview-session-1", 1001L);
         inOrder.verify(mapper).selectOne(any());
         inOrder.verify(mapper).updateById(any(InterviewRecordDO.class));
         ArgumentCaptor<InterviewRecordDO> recordCaptor = ArgumentCaptor.forClass(InterviewRecordDO.class);
