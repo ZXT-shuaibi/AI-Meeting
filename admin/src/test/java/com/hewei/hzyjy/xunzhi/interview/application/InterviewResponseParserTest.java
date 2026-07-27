@@ -4,6 +4,7 @@ import com.hewei.hzyjy.xunzhi.interview.shared.InterviewResponseParser;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -56,5 +57,15 @@ class InterviewResponseParserTest {
         Integer score = parser.parseScoreFromResponse(result, "score");
 
         assertEquals(80, score);
+    }
+
+    @Test
+    void shouldExtractQuestionTextFromObjectArray() {
+        List<String> questions = parser.asStringList(List.of(
+                Map.of("question", "请介绍你最有代表性的项目"),
+                Map.of("content", "你如何验证项目效果？")
+        ));
+
+        assertEquals(List.of("请介绍你最有代表性的项目", "你如何验证项目效果？"), questions);
     }
 }

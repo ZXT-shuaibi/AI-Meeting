@@ -2,20 +2,46 @@ package com.hewei.hzyjy.xunzhi.interview.flow.report;
 
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
+import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
+import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContext;
+import com.hewei.hzyjy.xunzhi.interview.application.history.InterviewHistoryContextProvider;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.InterviewReviewFeedbackRespDTO;
 import com.hewei.hzyjy.xunzhi.interview.api.io.resp.RadarChartDTO;
 import com.hewei.hzyjy.xunzhi.interview.service.model.InterviewTurnLog;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class InterviewReportAiReviewerTest {
+
+    @Test
+    void addsHistoryProjectionToReportPrompt() {
+        AiGateway aiGateway = mock(AiGateway.class);
+        InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
+        when(historyProvider.load("session-1")).thenReturn(new InterviewHistoryContext(
+                true, 5L, 3L, List.of("1"), List.of(), List.of(), List.of(), List.of("2")));
+        when(aiGateway.chat(any())).thenReturn(AiGatewayResult.builder()
+                .content("{\"overallComment\":\"表现稳定\",\"highlights\":[\"回答完整\"],\"improvementTips\":[],\"nextActions\":[]}")
+                .degraded(false)
+                .build());
+        InterviewReportAiReviewer reviewer = new InterviewReportAiReviewer(aiGateway);
+        reviewer.setInterviewHistoryContextProvider(historyProvider);
+
+        reviewer.review("session-1", "backend", List.of(), new RadarChartDTO(), "");
+
+        ArgumentCaptor<AiPromptRequest> request = ArgumentCaptor.forClass(AiPromptRequest.class);
+        verify(aiGateway).chat(request.capture());
+        assertTrue(request.getValue().userPrompt().contains("uncovered_question_numbers"));
+    }
 
     @Test
     void shouldBuildChineseStructuredFeedbackFromAiResponse() {

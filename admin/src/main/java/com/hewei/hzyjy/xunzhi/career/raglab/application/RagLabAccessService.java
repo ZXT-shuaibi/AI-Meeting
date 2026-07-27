@@ -7,6 +7,7 @@ import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.user.service.AdminPermissionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.Objects;
 
@@ -19,10 +20,16 @@ public class RagLabAccessService {
     private final AdminPermissionService adminPermissionService;
 
     public boolean isAdministrator(String username) {
+        if (!StringUtils.hasText(username)) {
+            return false;
+        }
         return Boolean.TRUE.equals(adminPermissionService.isAdmin(username));
     }
 
     public boolean canAccess(Long userId, String username) {
+        if (userId == null || !StringUtils.hasText(username)) {
+            return false;
+        }
         return isAdministrator(username) || Boolean.TRUE.equals(permissionMapper.selectOne(
                 Wrappers.lambdaQuery(RagLabPermissionDO.class)
                         .eq(RagLabPermissionDO::getUserId, userId)

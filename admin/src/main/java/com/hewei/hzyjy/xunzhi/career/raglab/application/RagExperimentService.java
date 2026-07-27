@@ -1,9 +1,12 @@
 package com.hewei.hzyjy.xunzhi.career.raglab.application;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.hewei.hzyjy.xunzhi.career.raglab.api.io.CreateRagExperimentReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.api.io.UpdateRagJudgementsReqDTO;
+import com.hewei.hzyjy.xunzhi.career.raglab.api.io.UpdateRagEvidenceAnnotationsReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.*;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.*;
 import com.hewei.hzyjy.xunzhi.career.raglab.model.RagExperimentMetrics;
@@ -40,6 +43,7 @@ public class RagExperimentService {
 
     private final RagExperimentDatasetService datasetService;
     private final RagExperimentMetricCalculator metricCalculator;
+    private final RagExperimentEvidenceMetricCalculator evidenceMetricCalculator;
     private final ResumeRagService resumeRagService;
     private final RagExperimentMapper experimentMapper;
     private final RagExperimentJudgementMapper judgementMapper;
@@ -168,6 +172,39 @@ public class RagExperimentService {
         int fallbackStageCount = (int) numeric(jsonMap(experiment.getMetricSnapshotJson()).get("fallbackStageCount"));
         experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, duration, returned, fallbackStageCount)));
         experimentMapper.updateById(experiment);
+        refreshEvidenceMetricSnapshot(experiment);
+    }
+
+    /**
+     * 将证据核验写回本次实验的结果快照；不影响上传简历的可复用基础标签。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void updateEvidenceAnnotations(Long experimentId, Long ownerUserId,
+                                          List<UpdateRagEvidenceAnnotationsReqDTO.Item> items) {
+        RagExperimentDO experiment = requireOwnedExperiment(experimentId, ownerUserId);
+        Map<Long, List<UpdateRagEvidenceAnnotationsReqDTO.Item>> annotationsByResume = Optional.ofNullable(items)
+                .orElse(List.of()).stream().collect(Collectors.groupingBy(UpdateRagEvidenceAnnotationsReqDTO.Item::getResumeId));
+        for (Map.Entry<Long, List<UpdateRagEvidenceAnnotationsReqDTO.Item>> entry : annotationsByResume.entrySet()) {
+            RagExperimentResultDO result = resultMapper.selectOne(Wrappers.lambdaQuery(RagExperimentResultDO.class)
+                    .eq(RagExperimentResultDO::getExperimentId, experimentId)
+                    .eq(RagExperimentResultDO::getResumeId, entry.getKey()).last("LIMIT 1"));
+            if (result == null) {
+                throw new ClientException("待标注的简历不在本次实验的召回结果中");
+            }
+            JSONArray evidence = parseEvidence(result.getMatchedChunksJson());
+            for (UpdateRagEvidenceAnnotationsReqDTO.Item annotation : entry.getValue()) {
+                int index = annotation.getEvidenceIndex();
+                if (index < 0 || index >= evidence.size()) {
+                    throw new ClientException("证据片段序号无效，请刷新实验结果后重试");
+                }
+                JSONObject normalized = normalizeEvidence(evidence.get(index));
+                normalized.put("hit", annotation.getHit());
+                evidence.set(index, normalized);
+            }
+            result.setMatchedChunksJson(JSON.toJSONString(evidence));
+            resultMapper.updateById(result);
+        }
+        refreshEvidenceMetricSnapshot(experiment);
     }
 
     public RagExperimentDO requireExperiment(Long experimentId) {
@@ -301,6 +338,47 @@ public class RagExperimentService {
         snapshot.put("totalDurationMs", durationMs);
         snapshot.put("fallbackStageCount", fallbackStageCount);
         return snapshot;
+    }
+
+    /**
+     * 仅覆盖证据核验相关字段，保留实验完成时冻结的主检索指标与阶段耗时。
+     */
+    private void refreshEvidenceMetricSnapshot(RagExperimentDO experiment) {
+        List<Boolean> hits = resultMapper.selectList(Wrappers.lambdaQuery(RagExperimentResultDO.class)
+                        .eq(RagExperimentResultDO::getExperimentId, experiment.getId()))
+                .stream().flatMap(result -> parseEvidence(result.getMatchedChunksJson()).stream())
+                .map(this::normalizeEvidence).map(item -> item.getBoolean("hit"))
+                .filter(Objects::nonNull).toList();
+        Map<String, Object> metrics = new LinkedHashMap<>(jsonMap(experiment.getMetricSnapshotJson()));
+        Double accuracy = evidenceMetricCalculator.accuracy(hits);
+        metrics.put("chunkHitAccuracy", accuracy);
+        metrics.put("chunkHitAccuracyStatus", hits.isEmpty() ? "未标注" : "已标注 " + hits.size() + " 个证据片段");
+        experiment.setMetricSnapshotJson(JSON.toJSONString(metrics));
+        experimentMapper.updateById(experiment);
+    }
+
+    private JSONArray parseEvidence(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return new JSONArray();
+        }
+        try {
+            JSONArray evidence = JSON.parseArray(raw);
+            return evidence == null ? new JSONArray() : evidence;
+        } catch (Exception ex) {
+            throw new ClientException("实验归档的证据片段格式无效，无法完成标注");
+        }
+    }
+
+    private JSONObject normalizeEvidence(Object raw) {
+        if (raw instanceof JSONObject object) {
+            if (!object.containsKey("text")) {
+                object.put("text", object.toJSONString());
+            }
+            return object;
+        }
+        JSONObject normalized = new JSONObject();
+        normalized.put("text", String.valueOf(raw));
+        return normalized;
     }
 
     private static Object parseJson(String value) { return value == null || value.isBlank() ? Map.of() : JSON.parse(value); }

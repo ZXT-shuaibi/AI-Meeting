@@ -45,7 +45,9 @@ public class AdminRagLabPermissionController {
                 .stream().map(user -> {
                     RagLabPermissionDO permission = permissions.get(user.getId());
                     return Map.<String, Object>of(
-                            "userId", user.getId(),
+                            // 雪花 ID 超过 JavaScript 的安全整数范围；必须作为字符串传输，
+                            // 否则管理员点击授权后会把四舍五入后的错误 ID 写入数据库。
+                            "userId", String.valueOf(user.getId()),
                             "username", user.getUsername() == null ? "" : user.getUsername(),
                             "realName", user.getRealName() == null ? "" : user.getRealName(),
                             "enabled", permission != null && Boolean.TRUE.equals(permission.getEnabled()),

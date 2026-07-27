@@ -8,4 +8,7 @@ import java.util.List;
 public class ReplaceResumeTagsReqDTO {
     private List<String> roles;
     private List<String> directions;
+    private List<String> projects;
+    private List<String> skills;
+    private List<String> experiences;
 }

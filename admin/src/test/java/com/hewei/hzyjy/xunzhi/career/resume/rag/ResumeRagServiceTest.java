@@ -16,7 +16,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.CHUNK_TYPE_EDUCATION;
+import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.CHUNK_TYPE_OVERVIEW;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.CHUNK_TYPE_PROJECT;
+import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.CHUNK_TYPE_SKILLS;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_CHUNK_INDEX;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_CHUNK_TYPE;
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_RESUME_ID;
@@ -25,6 +28,29 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class ResumeRagServiceTest {
+
+    @Test
+    void boostsSkillsChunkDuringRrfFusionWhenChunkWeightIsConfigured() {
+        CareerRagProperties properties = new CareerRagProperties();
+        properties.setBm25Enabled(false);
+        properties.setHydeEnabled(false);
+        properties.setMultiQueryEnabled(false);
+        properties.setChunkWeights(Map.of(CHUNK_TYPE_SKILLS, 1.4));
+        ResumeRagService service = new ResumeRagService(
+                new ResumeChunker(),
+                new StaticEmbeddingGateway(),
+                new ChunkWeightedVectorStore(),
+                request -> AiGatewayResult.builder().content("").provider("test").build(),
+                properties,
+                (query, candidates, limit) -> candidates.stream().limit(limit).toList(),
+                emptyProvider(),
+                emptyTraceProvider()
+        );
+
+        List<String> result = service.retrieveTemplates("Java backend engineer", 1, 7L, Set.of("101", "102"));
+
+        assertEquals(List.of("skills: Java Spring Redis"), result);
+    }
 
     @Test
     void retrievesCandidatesFromIndependentBm25LaneWhenVectorSearchMisses() {
@@ -131,7 +157,7 @@ class ResumeRagServiceTest {
 
         assertEquals(List.of(javaProject.text()), result);
         List<String> failedTools = eventPublisher.toolEvents().stream()
-                .filter(event -> !event.success())
+                .filter(event -> !event.success() && event.toolName().startsWith("rag-"))
                 .map(AiToolExecutionEvent::toolName)
                 .toList();
         assertEquals(List.of(
@@ -141,6 +167,38 @@ class ResumeRagServiceTest {
                 "rag-vector-fine",
                 "rag-rerank"
         ), failedTools);
+    }
+
+    @Test
+    void publishesEveryRagStageWithTheCallerProvidedBusinessTraceId() {
+        RecordingEventPublisher eventPublisher = new RecordingEventPublisher();
+        CareerRagProperties properties = new CareerRagProperties();
+        properties.setHydeEnabled(false);
+        properties.setMultiQueryEnabled(false);
+        properties.setVectorEnabled(false);
+        properties.setBm25Enabled(false);
+        ResumeRagService service = new ResumeRagService(
+                new ResumeChunker(),
+                new StaticEmbeddingGateway(),
+                new VectorMissStore(List.of()),
+                request -> AiGatewayResult.builder().content("").provider("test").build(),
+                properties,
+                (query, candidates, limit) -> candidates.stream().limit(limit).toList(),
+                emptyProvider(),
+                traceProvider(new AiTracePublisher(eventPublisher))
+        );
+
+        service.retrieveTemplates("Java backend engineer", 1, 7L, Set.of("101"), true,
+                "job-match-001", "JD_ALIGNMENT");
+
+        List<AiToolExecutionEvent> stageEvents = eventPublisher.toolEvents().stream()
+                .filter(event -> event.toolName().startsWith("RAG_STAGE_"))
+                .toList();
+        assertFalse(stageEvents.isEmpty());
+        assertEquals(Set.of("job-match-001"), stageEvents.stream()
+                .map(AiToolExecutionEvent::traceId).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(Set.of("JD_ALIGNMENT"), stageEvents.stream()
+                .map(AiToolExecutionEvent::sceneCode).collect(java.util.stream.Collectors.toSet()));
     }
 
     private ResumeVectorDocument javaProject() {
@@ -192,6 +250,48 @@ class ResumeRagServiceTest {
         @Override
         public List<float[]> embedAll(List<String> texts) {
             throw new IllegalStateException("embedding unavailable");
+        }
+    }
+
+    private static class ChunkWeightedVectorStore implements ResumeVectorStore {
+        private final ResumeVectorDocument overview101 = document("overview-101", "overview", "101", CHUNK_TYPE_OVERVIEW);
+        private final ResumeVectorDocument overview102 = document("overview-102", "overview", "102", CHUNK_TYPE_OVERVIEW);
+        private final ResumeVectorDocument education = document("education-101", "education: bachelor degree", "101", CHUNK_TYPE_EDUCATION);
+        private final ResumeVectorDocument skills = document("skills-102", "skills: Java Spring Redis", "102", CHUNK_TYPE_SKILLS);
+
+        @Override
+        public void addAll(List<ResumeVectorDocument> documents) {
+        }
+
+        @Override
+        public List<ResumeVectorMatch> search(float[] queryVector, Set<String> chunkTypes, Set<String> resumeIds, Map<String, String> metadataFilters, double minScore, int limit) {
+            if (!chunkTypes.isEmpty()) {
+                return List.of(match(overview101), match(overview102));
+            }
+            return List.of(match(education), match(skills));
+        }
+
+        @Override
+        public List<ResumeVectorDocument> findByResumeIds(Set<String> resumeIds) {
+            return List.of(overview101, overview102, education, skills);
+        }
+
+        private static ResumeVectorDocument document(String id, String text, String resumeId, String chunkType) {
+            return ResumeVectorDocument.builder()
+                    .id(id)
+                    .text(text)
+                    .vector(new float[]{1.0F})
+                    .metadata(Map.of(
+                            META_RESUME_ID, resumeId,
+                            META_USER_ID, "7",
+                            META_CHUNK_TYPE, chunkType,
+                            META_CHUNK_INDEX, "0"
+                    ))
+                    .build();
+        }
+
+        private static ResumeVectorMatch match(ResumeVectorDocument document) {
+            return ResumeVectorMatch.builder().document(document).score(1.0).build();
         }
     }
 

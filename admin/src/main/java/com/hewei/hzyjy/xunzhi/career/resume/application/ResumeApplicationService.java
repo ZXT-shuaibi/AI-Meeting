@@ -14,6 +14,7 @@ import com.hewei.hzyjy.xunzhi.career.memory.MemoryRole;
 import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.raglab.application.RagResumeAutoTagService;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagMatch;
@@ -22,6 +23,7 @@ import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
@@ -82,8 +84,10 @@ public class ResumeApplicationService {
     private final TaskExecutor careerTaskExecutor;
     private final ObjectProvider<AiTracePublisher> tracePublisherProvider;
     private final ResumeObjectStorage resumeObjectStorage;
+    private final RagResumeAutoTagService ragResumeAutoTagService;
     private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
 
+    @Autowired
     public ResumeApplicationService(
             ResumeStore resumeStore,
             JobMatchTaskStore jobMatchTaskStore,
@@ -98,7 +102,8 @@ public class ResumeApplicationService {
             ResumeRenderService resumeRenderService,
             @Qualifier("careerTaskExecutor") TaskExecutor careerTaskExecutor,
             ObjectProvider<AiTracePublisher> tracePublisherProvider,
-            ResumeObjectStorage resumeObjectStorage) {
+            ResumeObjectStorage resumeObjectStorage,
+            RagResumeAutoTagService ragResumeAutoTagService) {
         this.resumeStore = resumeStore;
         this.jobMatchTaskStore = jobMatchTaskStore;
         this.resumeParseTaskStore = resumeParseTaskStore;
@@ -113,6 +118,22 @@ public class ResumeApplicationService {
         this.careerTaskExecutor = careerTaskExecutor;
         this.tracePublisherProvider = tracePublisherProvider;
         this.resumeObjectStorage = resumeObjectStorage == null ? ResumeObjectStorage.disabled() : resumeObjectStorage;
+        this.ragResumeAutoTagService = ragResumeAutoTagService;
+    }
+
+    /** 保持既有单元测试和非 Spring 调用方的构造方式兼容，自动标签在该场景下不参与执行。 */
+    public ResumeApplicationService(
+            ResumeStore resumeStore, JobMatchTaskStore jobMatchTaskStore, ResumeParseTaskStore resumeParseTaskStore,
+            ResumeRagService resumeRagService, CvOptimizationOrchestrator cvOptimizationOrchestrator,
+            InterviewPlanningService interviewPlanningService, CareerInterviewExecutionBridge interviewExecutionBridge,
+            HybridCompactingChatMemory chatMemory, ResumeStructuringService resumeStructuringService,
+            ResumePdfTextExtractor resumePdfTextExtractor, ResumeRenderService resumeRenderService,
+            TaskExecutor careerTaskExecutor, ObjectProvider<AiTracePublisher> tracePublisherProvider,
+            ResumeObjectStorage resumeObjectStorage) {
+        this(resumeStore, jobMatchTaskStore, resumeParseTaskStore, resumeRagService, cvOptimizationOrchestrator,
+                interviewPlanningService, interviewExecutionBridge, chatMemory, resumeStructuringService,
+                resumePdfTextExtractor, resumeRenderService, careerTaskExecutor, tracePublisherProvider,
+                resumeObjectStorage, null);
     }
 
     public ResumeUploadResult upload(Long userId, MultipartFile file) {
@@ -121,6 +142,7 @@ public class ResumeApplicationService {
         try {
             CvBO parsed = parseUpload(userId, file);
             CvBO saved = resumeStore.save(parsed);
+            if (ragResumeAutoTagService != null) ragResumeAutoTagService.generateAndReplace(saved);
             chatMemory.add(memoryId(saved.getId()), MemoryMessage.builder()
                     .role(MemoryRole.USER)
                     .content("Resume uploaded and parsed: " + saved.getName() + " / " + saved.getTitle())
@@ -548,6 +570,7 @@ public class ResumeApplicationService {
                     .userId(task.userId())
                     .cvType(StringUtils.hasText(task.cvType()) ? task.cvType() : "upload")
                     .build());
+            if (ragResumeAutoTagService != null) ragResumeAutoTagService.generateAndReplace(saved);
             doEmbedding(saved, false);
             resumeParseTaskStore.save(task.completed(saved.getId()));
             publishParseMetric(task, saved.getId(), parseStart, true, null);

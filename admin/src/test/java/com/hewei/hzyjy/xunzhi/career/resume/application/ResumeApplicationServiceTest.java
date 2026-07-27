@@ -38,6 +38,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -48,6 +49,86 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 
 class ResumeApplicationServiceTest {
+
+    @Test
+    void optimizationHistoryKeepsLegacyResultJsonWithoutDeserializingItsCvPayload() {
+        InMemoryResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        ResumeParseTaskRecord optimized = parseTask(
+                "legacy-optimization",
+                ResumeParseTaskStatus.COMPLETED,
+                Instant.now(),
+                "legacy".getBytes(StandardCharsets.UTF_8),
+                99L
+        ).withOptimization(
+                "Java backend JD",
+                "{\"cv\":{\"inputs\":{\"legacy\":true}},\"bestReview\":{\"score\":0.9,\"feedback\":\"good\"},\"iterations\":2,\"scoreGatePassed\":true,\"reviewHistory\":[]}"
+        );
+        parseTaskStore.save(optimized);
+        ResumeApplicationService service = service(
+                mock(ResumeStore.class),
+                mock(ResumeRagService.class),
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> null,
+                new ResumeRenderService(),
+                parseTaskStore,
+                Runnable::run
+        );
+
+        List<ResumeOptimizationHistoryResult> history = service.listOptimizationHistory(7L);
+
+        assertEquals(1, history.size());
+        Object score = ((java.util.Map<?, ?>) history.get(0).result().get("bestReview")).get("score");
+        assertEquals(0.9D, ((Number) score).doubleValue());
+    }
+
+    @Test
+    void completedTaskDeduplicationPreservesPersistedCandidateOrder() {
+        InMemoryResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        Instant now = Instant.now();
+        parseTaskStore.save(parseTask("resume-1", ResumeParseTaskStatus.COMPLETED, now.minusSeconds(300), "one".getBytes(StandardCharsets.UTF_8), 1L));
+        parseTaskStore.save(parseTask("resume-2", ResumeParseTaskStatus.COMPLETED, now.minusSeconds(200), "two".getBytes(StandardCharsets.UTF_8), 2L));
+        parseTaskStore.save(parseTask("resume-3", ResumeParseTaskStatus.COMPLETED, now.minusSeconds(100), "three".getBytes(StandardCharsets.UTF_8), 3L));
+        parseTaskStore.updateDisplayOrder(7L, List.of(3L, 1L, 2L));
+        ResumeApplicationService service = service(
+                mock(ResumeStore.class),
+                mock(ResumeRagService.class),
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> null,
+                new ResumeRenderService(),
+                parseTaskStore,
+                Runnable::run
+        );
+
+        List<Long> resumeIds = service.listParseTasks(7L, ResumeParseTaskStatus.COMPLETED.name()).stream()
+                .map(ResumeParseTaskResult::resumeId)
+                .toList();
+
+        assertEquals(List.of(3L, 1L, 2L), resumeIds);
+    }
+
+    @Test
+    void uploadAsyncCreatesNewTaskWhenSameFilePreviouslyFailed() throws Exception {
+        byte[] pdf = minimalPdf("retryable resume");
+        InMemoryResumeParseTaskStore parseTaskStore = new InMemoryResumeParseTaskStore();
+        parseTaskStore.save(parseTask("failed-task", ResumeParseTaskStatus.FAILED, Instant.now(), pdf));
+        ManualTaskExecutor executor = new ManualTaskExecutor();
+        ResumeApplicationService service = service(
+                mock(ResumeStore.class),
+                mock(ResumeRagService.class),
+                mock(CvOptimizationOrchestrator.class),
+                (userId, filename, text) -> null,
+                new ResumeRenderService(),
+                parseTaskStore,
+                executor
+        );
+        MockMultipartFile file = new MockMultipartFile("resume", "retry.pdf", "application/pdf", pdf);
+
+        ResumeParseTaskResult result = service.uploadAsync(7L, file, "upload");
+
+        assertNotEquals("failed-task", result.taskId());
+        assertEquals(ResumeParseTaskStatus.PROCESSING.name(), result.status());
+        assertEquals(1, executor.tasks.size());
+    }
 
     @Test
     void optimizeDoesNotOverwritePrimaryResumeWhenScoreGateFails() {

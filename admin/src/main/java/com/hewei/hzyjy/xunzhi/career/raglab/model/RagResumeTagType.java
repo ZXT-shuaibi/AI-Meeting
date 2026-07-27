@@ -18,7 +18,16 @@ public enum RagResumeTagType {
     ROLE("ROLE"),
 
     /** 技术、业务或职业方向分类。 */
-    DIRECTION("DIRECTION");
+    DIRECTION("DIRECTION"),
+
+    /** 简历项目名称、项目角色或项目领域。 */
+    PROJECT("PROJECT"),
+
+    /** 技术、工具、方法论或行业技能。 */
+    SKILL("SKILL"),
+
+    /** 工作公司、工作角色、行业或工作经历摘要。 */
+    EXPERIENCE("EXPERIENCE");
 
     @EnumValue
     private final String value;
