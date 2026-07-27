@@ -104,6 +104,41 @@ public class RagExperimentDatasetService {
                 .orderByAsc(RagExperimentDatasetItemDO::getDisplayOrder));
     }
 
+    /**
+     * 替换测试集成员，仅影响未来发起的实验；既有实验已保存候选与结果快照，不会被改写。
+     */
+    public void replaceItems(Long datasetId, Long requesterUserId, boolean administrator, List<Long> resumeIds) {
+        RagExperimentDatasetDO dataset = requireDataset(datasetId);
+        LinkedHashSet<Long> uniqueResumeIds = new LinkedHashSet<>();
+        Optional.ofNullable(resumeIds).orElse(List.of()).stream().filter(Objects::nonNull).forEach(uniqueResumeIds::add);
+        if (uniqueResumeIds.isEmpty()) {
+            throw new ClientException("测试集至少需要保留一份已解析简历");
+        }
+        Long owner = resolveDatasetOwner(requesterUserId, administrator, uniqueResumeIds);
+        if (!Objects.equals(owner, dataset.getOwnerUserId())) {
+            throw new ClientException("不能将测试集替换为其他用户的简历");
+        }
+        itemMapper.delete(Wrappers.lambdaQuery(RagExperimentDatasetItemDO.class)
+                .eq(RagExperimentDatasetItemDO::getDatasetId, datasetId));
+        int index = 0;
+        for (Long resumeId : uniqueResumeIds) {
+            RagExperimentDatasetItemDO item = new RagExperimentDatasetItemDO();
+            item.setDatasetId(datasetId); item.setOwnerUserId(owner); item.setResumeId(resumeId); item.setDisplayOrder(++index);
+            itemMapper.insert(item);
+        }
+    }
+
+    /**
+     * 只更新测试集的展示信息。候选成员、归属用户和已经发起的实验均不在此处改动，
+     * 因而重命名不会改变任何历史实验的候选集与量化结果快照。
+     */
+    public void updateMetadata(Long datasetId, String name, String description) {
+        RagExperimentDatasetDO dataset = requireDataset(datasetId);
+        dataset.setName(name.trim());
+        dataset.setDescription(description == null ? null : description.trim());
+        datasetMapper.updateById(dataset);
+    }
+
     public CareerResumeDO requireOwnedParsedResume(Long owner, Long resumeId) {
         CareerResumeDO resume = resumeMapper.selectById(resumeId);
         if (resume == null || !Objects.equals(owner, resume.getUserId())) {

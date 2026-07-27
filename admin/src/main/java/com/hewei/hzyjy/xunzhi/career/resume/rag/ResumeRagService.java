@@ -203,9 +203,26 @@ public class ResumeRagService {
             throw new IllegalArgumentException("RAG 实验运行参数不能为空");
         }
         experimentRuntimeOptions.set(options);
+        long startedAt = System.currentTimeMillis();
         try {
-            return retrieveResumeMatches(query, options.topK(), userId, allowedResumeIds,
+            List<ResumeRagMatch> matches = retrieveResumeMatches(query, options.topK(), userId, allowedResumeIds,
                     options.ragEnabled(), experimentTraceId, "RAG_EXPERIMENT");
+            // RAG 阶段事件此前只有 tool trace、没有同 traceId 的主业务调用，导致实时监控无法把
+            // “RAG 实验”识别为一次已使用 RAG 的调用。补齐 END trace 后，阶段与主调用即可关联。
+            AiTracePublisher tracePublisher = tracePublisherProvider.getIfAvailable();
+            if (tracePublisher != null && experimentTraceId != null && !experimentTraceId.isBlank()) {
+                tracePublisher.completed(experimentTraceId, "RAG_EXPERIMENT", null,
+                        "INTERNAL", "RESUME_RAG", startedAt,
+                        "matched=" + matches.size(),
+                        Map.of(
+                                "ragRequested", true,
+                                "ragEnabled", options.ragEnabled(),
+                                "businessType", "RAG_EXPERIMENT",
+                                "resumeScope", allowedResumeIds == null ? 0 : allowedResumeIds.size(),
+                                "resultCount", matches.size()
+                        ));
+            }
+            return matches;
         } finally {
             experimentRuntimeOptions.remove();
         }

@@ -5,7 +5,7 @@ import com.hewei.hzyjy.xunzhi.career.raglab.application.RagExperimentDatasetServ
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagExperimentService;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagLabAccessService;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagLabResumeCandidateService;
-import com.hewei.hzyjy.xunzhi.career.raglab.application.RagResumeAutoTagService;
+import com.hewei.hzyjy.xunzhi.career.raglab.application.RagResumeAutoTagTaskService;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagResumeTagDO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.RagExperimentDatasetMapper;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.RagResumeTagMapper;
@@ -61,7 +61,7 @@ class RagLabControllerSourcePdfTest {
                 taskMapper,
                 storage,
                 renderService,
-                mock(RagResumeAutoTagService.class));
+                mock(RagResumeAutoTagTaskService.class));
 
         ResponseEntity<byte[]> response = controller.sourcePdf(7L, 9L, "tester");
 

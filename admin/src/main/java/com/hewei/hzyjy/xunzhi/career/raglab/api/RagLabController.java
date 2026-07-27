@@ -7,16 +7,19 @@ import com.hewei.hzyjy.xunzhi.career.raglab.api.io.CreateRagExperimentReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.api.io.ReplaceResumeTagsReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.api.io.UpdateRagJudgementsReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.api.io.UpdateRagEvidenceAnnotationsReqDTO;
+import com.hewei.hzyjy.xunzhi.career.raglab.api.io.UpdateRagDatasetItemsReqDTO;
+import com.hewei.hzyjy.xunzhi.career.raglab.api.io.UpdateRagDatasetReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagExperimentDatasetService;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagExperimentService;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagLabAccessService;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagLabResumeCandidateService;
-import com.hewei.hzyjy.xunzhi.career.raglab.application.RagResumeAutoTagService;
+import com.hewei.hzyjy.xunzhi.career.raglab.application.RagResumeAutoTagTaskService;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagExperimentDatasetDO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagExperimentDO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagResumeTagDO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.RagExperimentDatasetMapper;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.RagResumeTagMapper;
+import com.hewei.hzyjy.xunzhi.career.raglab.model.RagResumeAutoTagTaskResult;
 import com.hewei.hzyjy.xunzhi.career.resume.dao.entity.CareerResumeDO;
 import com.hewei.hzyjy.xunzhi.career.resume.dao.entity.CareerResumeParseTaskDO;
 import com.hewei.hzyjy.xunzhi.career.resume.dao.mapper.CareerResumeMapper;
@@ -57,7 +60,7 @@ public class RagLabController {
     private final CareerResumeParseTaskMapper parseTaskMapper;
     private final ResumeObjectStorage resumeObjectStorage;
     private final ResumeRenderService resumeRenderService;
-    private final RagResumeAutoTagService ragResumeAutoTagService;
+    private final RagResumeAutoTagTaskService ragResumeAutoTagTaskService;
 
     @GetMapping("/access")
     public Result<Map<String, Object>> access(@CurrentUser Long userId, @CurrentUser String username) {
@@ -84,6 +87,18 @@ public class RagLabController {
                 request.getResumeIds()));
     }
 
+    /** 编辑测试集名称与说明；候选简历仍通过专门接口修改，便于保留操作边界。 */
+    @PutMapping("/datasets/{datasetId}")
+    public Result<Void> updateDataset(@PathVariable Long datasetId,
+                                      @Valid @RequestBody UpdateRagDatasetReqDTO request,
+                                      @CurrentUser Long userId, @CurrentUser String username) {
+        accessService.requireLabAccess(userId, username);
+        RagExperimentDatasetDO dataset = datasetService.requireDataset(datasetId);
+        accessService.requireOwnerScope(userId, username, dataset.getOwnerUserId());
+        datasetService.updateMetadata(datasetId, request.getName(), request.getDescription());
+        return Results.success();
+    }
+
     @GetMapping("/datasets/{datasetId}")
     public Result<Map<String, Object>> datasetDetail(@PathVariable Long datasetId, @CurrentUser Long userId, @CurrentUser String username) {
         accessService.requireLabAccess(userId, username);
@@ -98,6 +113,17 @@ public class RagLabController {
                     "title", resume == null || resume.getTitle() == null ? "" : resume.getTitle());
         }).toList();
         return Results.success(Map.of("dataset", dataset, "items", items));
+    }
+
+    @PutMapping("/datasets/{datasetId}/items")
+    public Result<Void> updateDatasetItems(@PathVariable Long datasetId,
+                                           @Valid @RequestBody UpdateRagDatasetItemsReqDTO request,
+                                           @CurrentUser Long userId, @CurrentUser String username) {
+        accessService.requireLabAccess(userId, username);
+        RagExperimentDatasetDO dataset = datasetService.requireDataset(datasetId);
+        accessService.requireOwnerScope(userId, username, dataset.getOwnerUserId());
+        datasetService.replaceItems(datasetId, userId, accessService.isAdministrator(username), request.getResumeIds());
+        return Results.success();
     }
 
     /** 返回测试集中已存在的基础标签，供实验页直接点选相关性规则。 */
@@ -209,7 +235,26 @@ public class RagLabController {
         accessService.requireLabAccess(userId, username);
         RagExperimentDO experiment = experimentService.requireExperiment(experimentId);
         accessService.requireOwnerScope(userId, username, experiment.getOwnerUserId());
-        return Results.success(experimentService.detail(experimentId, experiment.getOwnerUserId()));
+        // 评测页不能只返回内部 resumeId：人工给 0/1/3 真值时必须能识别具体 PDF。
+        // 这里仅补充展示字段，不改变评分实体、实验快照或用户隔离规则。
+        Map<String, Object> detail = new java.util.LinkedHashMap<>(experimentService.detail(experimentId, experiment.getOwnerUserId()));
+        @SuppressWarnings("unchecked")
+        List<com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagExperimentJudgementDO> judgements =
+                (List<com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagExperimentJudgementDO>) detail.get("judgements");
+        List<Map<String, Object>> judgementViews = judgements.stream().map(judgement -> {
+            CareerResumeDO resume = resumeMapper.selectById(judgement.getResumeId());
+            Map<String, Object> value = new java.util.LinkedHashMap<>();
+            value.put("resumeId", judgement.getResumeId());
+            value.put("resumeName", resume == null || resume.getName() == null ? "未知简历" : resume.getName());
+            value.put("resumeTitle", resume == null ? "" : Objects.toString(resume.getTitle(), ""));
+            value.put("automaticScore", judgement.getAutomaticScore());
+            value.put("finalScore", judgement.getFinalScore());
+            value.put("ruleSource", judgement.getRuleSource());
+            value.put("overrideReason", judgement.getOverrideReason());
+            return value;
+        }).toList();
+        detail.put("judgements", judgementViews);
+        return Results.success(detail);
     }
 
     @PutMapping("/{experimentId}/judgements")
@@ -227,7 +272,7 @@ public class RagLabController {
      * 已有标签会原样返回，确保人工补充不会被重复点击意外覆盖。
      */
     @PostMapping("/resumes/{resumeId}/tags/evaluate")
-    public Result<List<RagResumeTagDO>> evaluateTags(@PathVariable Long resumeId, @CurrentUser Long userId, @CurrentUser String username) {
+    public Result<RagResumeAutoTagTaskResult> evaluateTags(@PathVariable Long resumeId, @CurrentUser Long userId, @CurrentUser String username) {
         accessService.requireLabAccess(userId, username);
         CareerResumeDO resume = requireResume(resumeId);
         Long owner = resume.getUserId();
@@ -240,13 +285,25 @@ public class RagLabController {
             if (cv == null) throw new ClientException("简历结构化数据为空，暂时无法进行 AI 预评");
             cv.setId(resumeId);
             cv.setUserId(owner);
-            return Results.success(ragResumeAutoTagService.evaluateOnDemand(cv));
+            return Results.success(ragResumeAutoTagTaskService.submit(owner, resumeId, cv));
         } catch (ClientException ex) {
             throw ex;
         } catch (Exception ex) {
             log.warn("AI 简历预评读取结构化数据失败，resumeId={}", resumeId, ex);
             throw new ClientException("简历结构化数据异常，暂时无法进行 AI 预评");
         }
+    }
+
+    /** 查询异步预评任务；前端只轮询这个轻量接口，不再长时间占用一次 HTTP 请求。 */
+    @GetMapping("/resumes/{resumeId}/tags/evaluate/{taskId}")
+    public Result<RagResumeAutoTagTaskResult> tagEvaluationTask(@PathVariable Long resumeId,
+                                                                  @PathVariable String taskId,
+                                                                  @CurrentUser Long userId,
+                                                                  @CurrentUser String username) {
+        accessService.requireLabAccess(userId, username);
+        CareerResumeDO resume = requireResume(resumeId);
+        accessService.requireOwnerScope(userId, username, resume.getUserId());
+        return Results.success(ragResumeAutoTagTaskService.query(resume.getUserId(), resumeId, taskId));
     }
 
     /**

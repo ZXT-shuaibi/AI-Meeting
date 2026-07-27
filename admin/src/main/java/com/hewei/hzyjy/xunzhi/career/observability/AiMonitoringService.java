@@ -46,17 +46,19 @@ public class AiMonitoringService {
     private final AiToolExecutionMapper toolExecutionMapper;
 
     public Map<String, Object> overview(int minutes) {
-        Instant from = Instant.now().minus(Duration.ofMinutes(normalizeMinutes(minutes)));
+        int windowMinutes = normalizeMinutes(minutes);
+        Instant from = windowStart(windowMinutes);
+        Date fromDate = from == null ? null : Date.from(from);
         List<AiInvocationTraceDO> traces = invocationTraceMapper.selectList(Wrappers.<AiInvocationTraceDO>lambdaQuery()
-                .ge(AiInvocationTraceDO::getCreateTime, Date.from(from))
+                .ge(fromDate != null, AiInvocationTraceDO::getCreateTime, fromDate)
                 .in(AiInvocationTraceDO::getEventType, List.of("END", "ERROR"))
                 .orderByAsc(AiInvocationTraceDO::getCreateTime));
         List<AiToolExecutionDO> ragStages = loadRagStages(from);
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("windowMinutes", normalizeMinutes(minutes));
+        result.put("windowMinutes", windowMinutes);
         result.put("generatedAt", Instant.now().toString());
-        result.put("invocations", invocationSummary(traces, normalizeMinutes(minutes)));
+        result.put("invocations", invocationSummary(traces, windowMinutes));
         result.put("scenes", sceneSummary(traces));
         result.put("providers", providerSummary(traces));
         result.put("rag", ragSummary(ragStages));
@@ -73,9 +75,10 @@ public class AiMonitoringService {
     }
 
     public Map<String, Object> ragStages(int minutes) {
-        Instant from = Instant.now().minus(Duration.ofMinutes(normalizeMinutes(minutes)));
+        int windowMinutes = normalizeMinutes(minutes);
+        Instant from = windowStart(windowMinutes);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("windowMinutes", normalizeMinutes(minutes));
+        result.put("windowMinutes", windowMinutes);
         result.put("generatedAt", Instant.now().toString());
         result.put("stages", ragSummary(loadRagStages(from)));
         return result;
@@ -94,9 +97,10 @@ public class AiMonitoringService {
             String traceId,
             Boolean hasRag) {
         int normalizedMinutes = normalizeMinutes(minutes);
-        Instant from = Instant.now().minus(Duration.ofMinutes(normalizedMinutes));
+        Instant from = windowStart(normalizedMinutes);
+        Date fromDate = from == null ? null : Date.from(from);
         List<AiInvocationTraceDO> traces = invocationTraceMapper.selectList(Wrappers.<AiInvocationTraceDO>lambdaQuery()
-                        .ge(AiInvocationTraceDO::getCreateTime, Date.from(from))
+                        .ge(fromDate != null, AiInvocationTraceDO::getCreateTime, fromDate)
                         .in(AiInvocationTraceDO::getEventType, List.of("END", "ERROR"))
                         .orderByDesc(AiInvocationTraceDO::getCreateTime))
                 .stream()
@@ -156,8 +160,9 @@ public class AiMonitoringService {
     }
 
     private List<AiToolExecutionDO> loadRagStages(Instant from) {
+        Date fromDate = from == null ? null : Date.from(from);
         return toolExecutionMapper.selectList(Wrappers.<AiToolExecutionDO>lambdaQuery()
-                .ge(AiToolExecutionDO::getEventTime, Date.from(from))
+                .ge(fromDate != null, AiToolExecutionDO::getEventTime, fromDate)
                 .likeRight(AiToolExecutionDO::getToolName, RAG_STAGE_PREFIX)
                 .orderByAsc(AiToolExecutionDO::getEventTime));
     }
@@ -289,7 +294,8 @@ public class AiMonitoringService {
         result.put("failed", failed);
         result.put("successRate", total == 0 ? 0D : succeeded * 100D / total);
         result.put("failureRate", total == 0 ? 0D : failed * 100D / total);
-        result.put("throughputPerMinute", total * 1D / windowMinutes);
+        // “全部历史”没有固定时间窗，不能把总次数除以 0 并伪造成吞吐率。
+        result.put("throughputPerMinute", windowMinutes == 0 ? 0D : total * 1D / windowMinutes);
         return result;
     }
 
@@ -431,6 +437,14 @@ public class AiMonitoringService {
     }
 
     private int normalizeMinutes(int minutes) {
+        if (minutes <= 0) {
+            return 0;
+        }
         return Math.min(10_080, Math.max(1, minutes));
+    }
+
+    /** minutes=0 代表管理员主动选择“全部历史”，不附加时间下限。 */
+    private Instant windowStart(int normalizedMinutes) {
+        return normalizedMinutes == 0 ? null : Instant.now().minus(Duration.ofMinutes(normalizedMinutes));
     }
 }

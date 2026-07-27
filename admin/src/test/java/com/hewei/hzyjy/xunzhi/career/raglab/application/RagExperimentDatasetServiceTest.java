@@ -71,4 +71,27 @@ class RagExperimentDatasetServiceTest {
         assertEquals("同一个 RAG 测试集只能选择同一用户的简历", error.getMessage());
         verifyNoInteractions(parseTaskMapper);
     }
+
+    @Test
+    void updatesDatasetNameAndDescriptionWithoutChangingItsOwnerOrItems() {
+        RagExperimentDatasetMapper datasetMapper = mock(RagExperimentDatasetMapper.class);
+        RagExperimentDatasetService service = new RagExperimentDatasetService(
+                datasetMapper,
+                mock(RagExperimentDatasetItemMapper.class),
+                mock(RagResumeTagMapper.class),
+                mock(CareerResumeMapper.class),
+                mock(CareerResumeParseTaskMapper.class));
+        RagExperimentDatasetDO dataset = new RagExperimentDatasetDO();
+        dataset.setId(7L);
+        dataset.setOwnerUserId(200L);
+        dataset.setName("旧名称");
+        when(datasetMapper.selectById(7L)).thenReturn(dataset);
+
+        service.updateMetadata(7L, "  新名称  ", "新的说明");
+
+        assertEquals("新名称", dataset.getName());
+        assertEquals("新的说明", dataset.getDescription());
+        assertEquals(200L, dataset.getOwnerUserId());
+        verify(datasetMapper).updateById(dataset);
+    }
 }
