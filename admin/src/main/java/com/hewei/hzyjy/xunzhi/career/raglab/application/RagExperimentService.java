@@ -13,6 +13,7 @@ import com.hewei.hzyjy.xunzhi.career.raglab.model.RagExperimentMetrics;
 import com.hewei.hzyjy.xunzhi.career.raglab.model.RagExperimentRuntimeOptions;
 import com.hewei.hzyjy.xunzhi.career.raglab.model.RagRelevanceRule;
 import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCoordinator;
+import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCheckpointService;
 import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStartCommand;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagMatch;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
@@ -61,6 +62,9 @@ public class RagExperimentService {
      */
     @Autowired(required = false)
     private AgentRunCoordinator agentRunCoordinator;
+
+    @Autowired(required = false)
+    private AgentRunCheckpointService checkpointService;
 
     @Transactional(rollbackFor = Exception.class)
     public RagExperimentDO createAndRun(Long requesterUserId, boolean administrator, CreateRagExperimentReqDTO request) {
@@ -135,6 +139,8 @@ public class RagExperimentService {
                     .map(String::valueOf).collect(Collectors.toCollection(LinkedHashSet::new));
             String traceId = "rag-exp-" + experiment.getId();
             harnessRunId = startHarnessRun(experiment, options, items.size(), traceId);
+            if (stopWhenCancelled(harnessRunId, experiment, "检索开始前已取消")) return;
+            checkpoint(harnessRunId, "RAG_RETRIEVE_BEFORE", Map.of("candidateCount", allowedIds.size()));
             stageHarnessRun(harnessRunId, "RAG_RETRIEVE", "开始执行实验检索", Map.of(
                     "candidateCount", allowedIds.size(), "ragEnabled", options.ragEnabled()));
             List<ResumeRagMatch> matches = resumeRagService.retrieveExperimentMatches(
@@ -142,12 +148,16 @@ public class RagExperimentService {
                     traceId);
             Map<String, Object> stageTrace = resumeRagService.consumeExperimentStageTrace(traceId);
             int fallbackStageCount = (int) numeric(stageTrace.get("fallbackStageCount"));
+            checkpoint(harnessRunId, "RAG_RETRIEVE_AFTER", Map.of("resultCount", matches.size(), "fallbackStageCount", fallbackStageCount));
+            if (stopWhenCancelled(harnessRunId, experiment, "检索完成后已取消")) return;
             stageHarnessRun(harnessRunId, "RAG_RETRIEVE", "实验检索完成", Map.of(
                     "resultCount", matches.size(), "fallbackStageCount", fallbackStageCount));
             saveResults(experiment, matches, startedAt, stageTrace, fallbackStageCount);
             stageHarnessRun(harnessRunId, "PERSIST", "实验召回结果已归档", Map.of("resultCount", matches.size()));
             stageHarnessRun(harnessRunId, "METRIC_CALCULATE", "开始计算检索量化指标", Map.of(
                     "resultCount", matches.size()));
+            checkpoint(harnessRunId, "METRIC_CALCULATE_BEFORE", Map.of("resultCount", matches.size()));
+            if (stopWhenCancelled(harnessRunId, experiment, "指标计算前已取消")) return;
             RagExperimentMetrics metrics = calculateMetrics(experiment.getId(), options.topK());
             experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, System.currentTimeMillis() - startedAt, matches.size(), fallbackStageCount)));
             experiment.setStatus("COMPLETED");
@@ -223,6 +233,22 @@ public class RagExperimentService {
         } catch (Exception auditEx) {
             log.warn("Harness 失败审计写入失败，保留原始 RAG 实验失败状态。运行编号={}", runId, auditEx);
         }
+    }
+
+    /** 协作式取消仅在 RAG 阶段边界生效，不强行中断正在运行的模型或向量请求。 */
+    private boolean stopWhenCancelled(String runId, RagExperimentDO experiment, String reason) {
+        if (runId == null || checkpointService == null || !checkpointService.isCancelled(runId)) return false;
+        experiment.setStatus("CANCELLED");
+        experiment.setCompletedAt(new Date());
+        experiment.setErrorSummary(reason);
+        experimentMapper.updateById(experiment);
+        return true;
+    }
+
+    private void checkpoint(String runId, String checkpointCode, Map<String, Object> metadata) {
+        if (runId == null || checkpointService == null) return;
+        try { checkpointService.checkpoint(runId, checkpointCode, metadata); }
+        catch (Exception ex) { log.warn("Harness 检查点写入失败，继续执行 RAG 实验。运行编号={} 阶段={}", runId, checkpointCode, ex); }
     }
 
     @Transactional(rollbackFor = Exception.class)

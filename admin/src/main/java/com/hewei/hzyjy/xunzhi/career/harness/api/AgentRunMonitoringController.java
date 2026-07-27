@@ -2,10 +2,12 @@ package com.hewei.hzyjy.xunzhi.career.harness.api;
 
 import cn.dev33.satoken.annotation.SaCheckRole;
 import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunQueryService;
+import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCheckpointService;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Result;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Results;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -26,6 +28,7 @@ import java.util.Map;
 public class AgentRunMonitoringController {
 
     private final AgentRunQueryService agentRunQueryService;
+    private final AgentRunCheckpointService checkpointService;
 
     @GetMapping
     public Result<Map<String, Object>> runs(
@@ -42,6 +45,13 @@ public class AgentRunMonitoringController {
     @GetMapping("/{runId}")
     public Result<Map<String, Object>> detail(@PathVariable String runId) {
         return Results.success(agentRunQueryService.detail(runId));
+    }
+
+    /** 仅登记协作式取消，由长任务在下一检查点安全退出。 */
+    @PostMapping("/{runId}/cancel")
+    public Result<Void> cancel(@PathVariable String runId) {
+        checkpointService.requestCancel(runId, "管理员请求取消");
+        return Results.success();
     }
 
     private Date toDate(Long epochMillis) {
