@@ -91,7 +91,7 @@ public class CvOptimizationOrchestrator {
                     failureReason = "Score gate not reached after max iterations";
                     break;
                 }
-                CvBO tailored = tailor.tailor(copyCv(latestCv), review, referenceTemplates);
+                CvBO tailored = tailor.tailor(copyCv(latestCv), jobDescription, review, referenceTemplates);
                 if (tailored == null) {
                     failureReason = "Tailor returned null";
                     break;

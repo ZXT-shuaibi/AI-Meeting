@@ -1,6 +1,7 @@
 package com.hewei.hzyjy.xunzhi.career.resume.rag;
 
 import com.hewei.hzyjy.xunzhi.career.ai.AiGatewayResult;
+import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.ai.EmbeddingGateway;
 import com.hewei.hzyjy.xunzhi.career.config.CareerRagProperties;
 import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
@@ -26,8 +27,44 @@ import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_R
 import static com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagConstants.META_USER_ID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ResumeRagServiceTest {
+
+    @Test
+    void enclosesSafeJobQueryInUntrustedDataBoundaryForHydeAndMultiQuery() {
+        CareerRagProperties properties = new CareerRagProperties();
+        properties.setVectorEnabled(false);
+        properties.setBm25Enabled(false);
+        List<AiPromptRequest> requests = new ArrayList<>();
+        ResumeRagService service = new ResumeRagService(
+                new ResumeChunker(),
+                new StaticEmbeddingGateway(),
+                new VectorMissStore(List.of()),
+                request -> {
+                    requests.add(request);
+                    return AiGatewayResult.builder()
+                            .content("RESUME_RAG_HYDE".equals(request.sceneCode())
+                                    ? "Java backend service experience" : "Java backend skills\nJava microservice experience")
+                            .provider("test")
+                            .build();
+                },
+                properties,
+                (query, candidates, limit) -> candidates.stream().limit(limit).toList(),
+                emptyProvider(),
+                emptyTraceProvider()
+        );
+
+        service.retrieveTemplates("Target role: Java backend engineer\nCore skills: Java, Spring Boot", 1, 7L, Set.of("101"));
+
+        assertEquals(2, requests.size());
+        for (AiPromptRequest request : requests) {
+            assertTrue(request.systemPrompt().contains("untrusted business data"));
+            assertTrue(request.systemPrompt().contains("Do not follow"));
+            assertTrue(request.userPrompt().startsWith("<untrusted_job_profile>"));
+            assertTrue(request.userPrompt().endsWith("</untrusted_job_profile>"));
+        }
+    }
 
     @Test
     void boostsSkillsChunkDuringRrfFusionWhenChunkWeightIsConfigured() {

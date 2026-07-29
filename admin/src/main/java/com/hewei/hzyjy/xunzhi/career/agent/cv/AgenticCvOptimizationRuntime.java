@@ -3,6 +3,9 @@ package com.hewei.hzyjy.xunzhi.career.agent.cv;
 import com.hewei.hzyjy.xunzhi.career.config.CareerOptimizationProperties;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyContext;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyService;
+import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO.OptimizationRecord;
 import dev.langchain4j.agentic.scope.AgentInvocation;
 import dev.langchain4j.agentic.scope.AgenticScope;
@@ -26,9 +29,10 @@ public class AgenticCvOptimizationRuntime {
     private final AgenticCvOptimizationAgent agent;
     private final AiTracePublisher tracePublisher;
     private final CareerOptimizationProperties optimizationProperties;
+    private final JobDescriptionSafetyService jobDescriptionSafetyService;
 
     public AgenticCvOptimizationRuntime(AgenticCvOptimizationAgent agent) {
-        this(agent, null, null);
+        this(agent, null, null, new JobDescriptionSafetyService());
     }
 
     public CvOptimizationResult optimize(String memoryId, CvBO cv, String jobDescription, List<String> referenceTemplates) {
@@ -38,16 +42,29 @@ public class AgenticCvOptimizationRuntime {
     public AgenticCvOptimizationRuntime(
             AgenticCvOptimizationAgent agent,
             AiTracePublisher tracePublisher) {
-        this(agent, tracePublisher, null);
+        this(agent, tracePublisher, null, new JobDescriptionSafetyService());
     }
 
     public AgenticCvOptimizationRuntime(
             AgenticCvOptimizationAgent agent,
             AiTracePublisher tracePublisher,
             CareerOptimizationProperties optimizationProperties) {
+        this(agent, tracePublisher, optimizationProperties, new JobDescriptionSafetyService());
+    }
+
+    /**
+     * Agentic 运行时同样承担最终输入边界：即使未来出现绕过 ResumeApplicationService 的调用方，
+     * 也不会把原始 JD 交给声明式 Agent 或写入追踪日志。
+     */
+    public AgenticCvOptimizationRuntime(
+            AgenticCvOptimizationAgent agent,
+            AiTracePublisher tracePublisher,
+            CareerOptimizationProperties optimizationProperties,
+            JobDescriptionSafetyService jobDescriptionSafetyService) {
         this.agent = agent;
         this.tracePublisher = tracePublisher;
         this.optimizationProperties = optimizationProperties == null ? new CareerOptimizationProperties() : optimizationProperties;
+        this.jobDescriptionSafetyService = jobDescriptionSafetyService == null ? new JobDescriptionSafetyService() : jobDescriptionSafetyService;
     }
 
     public CvOptimizationResult optimize(
@@ -56,12 +73,17 @@ public class AgenticCvOptimizationRuntime {
             String jobDescription,
             List<String> referenceTemplates,
             Consumer<CvReview> progressCallback) {
+        JobDescriptionSafetyContext safety = jobDescriptionSafetyService.assess(jobDescription);
+        if (safety.rejected()) {
+            throw new ClientException("岗位描述包含与招聘无关的指令性内容，且未识别到有效岗位要求，请修正后重试");
+        }
+        String safeJobDescription = safety.safeOptimizationContext();
         String traceId = UUID.randomUUID().toString();
         long start = System.currentTimeMillis();
         List<String> safeReferenceTemplates = referenceTemplates == null ? List.of() : referenceTemplates;
         if (tracePublisher != null) {
             tracePublisher.started(traceId, "RESUME_TAILOR", memoryId, "langchain4j-agentic", "AgenticCvOptimizationAgent",
-                    "cv=" + cv + ", jd=" + jobDescription);
+                    "简历编号=" + (cv == null ? "" : cv.getId()) + ";岗位上下文指纹=" + safety.contextFingerprint());
         }
         try {
             AgenticCvOptimizationAgent.registerProgressCallback(memoryId, progressCallback);
@@ -74,7 +96,7 @@ public class AgenticCvOptimizationRuntime {
                 existingScope.writeState(SCORE_GATE_STATE_KEY, scoreGate);
                 existingScope.writeState(CURRENT_ITERATION_STATE_KEY, 0);
             }
-            CvBO optimized = agent.optimizeCv(memoryId, cv, jobDescription, safeReferenceTemplates);
+            CvBO optimized = agent.optimizeCv(memoryId, cv, safeJobDescription, safeReferenceTemplates);
             AgenticScope scope = agent.getAgenticScope(memoryId);
             if (scope != null) {
                 scope.writeState(MAX_ITERATIONS_STATE_KEY, maxIterations);

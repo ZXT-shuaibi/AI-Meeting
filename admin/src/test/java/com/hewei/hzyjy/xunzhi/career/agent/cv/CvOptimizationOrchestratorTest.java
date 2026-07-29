@@ -125,4 +125,28 @@ class CvOptimizationOrchestratorTest {
         assertTrue(result.scoreGatePassed());
         assertEquals(0.77, result.bestReview().score());
     }
+
+    @Test
+    void forwardsJobProfileToTailorDuringEachOptimizationRound() {
+        CvBO original = CvBO.builder().name("candidate").summary("java backend").build();
+        CvReviewer reviewer = (cv, jd, templates) -> new CvReview(0.6, "feedback");
+        java.util.concurrent.atomic.AtomicReference<String> tailoredJobProfile = new java.util.concurrent.atomic.AtomicReference<>();
+        ScoredCvTailor tailor = new ScoredCvTailor() {
+            @Override
+            public CvBO tailor(CvBO cv, CvReview review, List<String> templates) {
+                return cv;
+            }
+
+            @Override
+            public CvBO tailor(CvBO cv, String jobProfile, CvReview review, List<String> templates) {
+                tailoredJobProfile.set(jobProfile);
+                return cv;
+            }
+        };
+        CvOptimizationOrchestrator orchestrator = new CvOptimizationOrchestrator(reviewer, tailor);
+
+        orchestrator.optimize(original, "目标岗位：Java 后端工程师", List.of(), 2);
+
+        assertEquals("目标岗位：Java 后端工程师", tailoredJobProfile.get());
+    }
 }

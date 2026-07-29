@@ -8,6 +8,7 @@ import com.hewei.hzyjy.xunzhi.career.agent.cv.ScoredCvTailor;
 import com.hewei.hzyjy.xunzhi.career.ai.LangChain4jAgenticSafetyPolicy;
 import com.hewei.hzyjy.xunzhi.career.memory.LangChain4jHybridMemoryAdapter;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyService;
 import dev.langchain4j.agentic.AgenticServices;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
@@ -62,11 +63,13 @@ public class AgenticCvRuntimeConfiguration {
     public AgenticCvOptimizationRuntime agenticCvOptimizationRuntime(
             AgenticCvOptimizationAgent agenticCvOptimizationAgent,
             ObjectProvider<AiTracePublisher> tracePublisherProvider,
-            ObjectProvider<CareerOptimizationProperties> optimizationPropertiesProvider) {
+            ObjectProvider<CareerOptimizationProperties> optimizationPropertiesProvider,
+            ObjectProvider<JobDescriptionSafetyService> jobDescriptionSafetyServiceProvider) {
         return new AgenticCvOptimizationRuntime(
                 agenticCvOptimizationAgent,
                 tracePublisherProvider.getIfAvailable(),
-                optimizationPropertiesProvider.getIfAvailable(CareerOptimizationProperties::new)
+                optimizationPropertiesProvider.getIfAvailable(CareerOptimizationProperties::new),
+                jobDescriptionSafetyServiceProvider.getIfAvailable(JobDescriptionSafetyService::new)
         );
     }
 

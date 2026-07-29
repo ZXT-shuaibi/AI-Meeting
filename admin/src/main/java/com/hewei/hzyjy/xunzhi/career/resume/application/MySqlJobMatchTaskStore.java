@@ -41,7 +41,8 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
             row.setStatus(task.status());
             row.setJobDescription(jobDescription);
             row.setLimitCount(limit);
-            row.setMatchedTemplatesJson(JSON.toJSONString(new JobMatchPayload(task.selectedResumeIds(), task.matchedResumes(), task.matchedTemplates())));
+            row.setMatchedTemplatesJson(JSON.toJSONString(new JobMatchPayload(
+                    task.selectedResumeIds(), task.matchedResumes(), task.matchedTemplates(), task.safetyNotice())));
             row.setErrorMessage(errorMessage);
             row.setUpdateTime(new Date());
             row.setDelFlag(0);
@@ -153,12 +154,12 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
     private JobMatchTaskResult fromRow(CareerJobMatchTaskDO row) {
         String json = row.getMatchedTemplatesJson();
         if (json == null || json.isBlank()) {
-            return new JobMatchTaskResult(row.getTaskId(), row.getUserId(), row.getStatus(), List.of(), List.of(), List.of(), row.getErrorMessage());
+            return new JobMatchTaskResult(row.getTaskId(), row.getUserId(), row.getStatus(), List.of(), List.of(), List.of(), row.getErrorMessage(), null);
         }
         if (json.trim().startsWith("[")) {
             List<String> templates = JSON.parseArray(json, String.class);
             return new JobMatchTaskResult(row.getTaskId(), row.getUserId(), row.getStatus(),
-                    templates == null ? List.of() : templates, List.of(), List.of(), row.getErrorMessage());
+                    templates == null ? List.of() : templates, List.of(), List.of(), row.getErrorMessage(), null);
         }
         JSONObject payload = JSON.parseObject(json);
         List<Long> selectedResumeIds = payload.getList("selectedResumeIds", Long.class);
@@ -171,13 +172,15 @@ public class MySqlJobMatchTaskStore implements JobMatchTaskStore {
                 templates == null ? List.of() : templates,
                 selectedResumeIds == null ? List.of() : selectedResumeIds,
                 candidates == null ? List.of() : candidates,
-                row.getErrorMessage()
+                row.getErrorMessage(),
+                payload.getString("safetyNotice")
         );
     }
 
     private record JobMatchPayload(
             List<Long> selectedResumeIds,
             List<JobMatchCandidate> matchedResumes,
-            List<String> matchedTemplates
+            List<String> matchedTemplates,
+            String safetyNotice
     ) { }
 }

@@ -12,11 +12,17 @@ import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.*;
 import com.hewei.hzyjy.xunzhi.career.raglab.model.RagExperimentMetrics;
 import com.hewei.hzyjy.xunzhi.career.raglab.model.RagExperimentRuntimeOptions;
 import com.hewei.hzyjy.xunzhi.career.raglab.model.RagRelevanceRule;
+import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCoordinator;
+import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCheckpointService;
+import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStartCommand;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagMatch;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyContext;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyService;
 import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
@@ -52,6 +58,19 @@ public class RagExperimentService {
     @Qualifier("careerTaskExecutor")
     private final TaskExecutor careerTaskExecutor;
 
+    /**
+     * Harness 运行总账是旁路审计能力。保留可选注入可确保尚未执行新增建表脚本的旧环境
+     * 仍能正常完成 RAG 实验，不能让观测能力反向阻断真实评测任务。
+     */
+    @Autowired(required = false)
+    private AgentRunCoordinator agentRunCoordinator;
+
+    @Autowired(required = false)
+    private AgentRunCheckpointService checkpointService;
+
+    @Autowired
+    private JobDescriptionSafetyService jobDescriptionSafetyService = new JobDescriptionSafetyService();
+
     @Transactional(rollbackFor = Exception.class)
     public RagExperimentDO createAndRun(Long requesterUserId, boolean administrator, CreateRagExperimentReqDTO request) {
         RagExperimentDatasetDO dataset = datasetService.requireDataset(request.getDatasetId());
@@ -65,22 +84,30 @@ public class RagExperimentService {
             throw new ClientException("至少配置一条标签判定规则");
         }
         validateRules(rules);
+        JobDescriptionSafetyContext safety = jobDescriptionSafetyService.assess(request.getJobDescription());
+        if (safety.rejected()) {
+            log.warn("RAG 实验已拒绝可疑 JD。请求用户编号={} 风险命中数={}", requesterUserId, safety.filteredInstructionCount());
+            throw new ClientException("岗位描述包含与招聘无关的指令性内容，且未识别到有效岗位要求，请修正后重试");
+        }
         List<RagExperimentDatasetItemDO> items = datasetService.listItems(dataset.getId());
         if (items.isEmpty()) {
             throw new ClientException("测试集内没有可用于实验的已解析简历");
         }
-        String configJson = JSON.toJSONString(options);
+        // 安全快照只保存决策和统计，不保存原始 JD 或命中的攻击语句；运行时可据此审计。
+        String configJson = runtimeConfigSnapshot(options, safety);
         String rulesJson = JSON.toJSONString(rules);
         RagExperimentDO experiment = new RagExperimentDO();
         experiment.setOwnerUserId(ownerUserId);
         experiment.setName(request.getName().trim());
         experiment.setDatasetId(dataset.getId());
-        experiment.setJobDescription(request.getJobDescription().trim());
+        experiment.setJobDescription(safety.safeRetrievalQuery());
         experiment.setTopK(options.topK());
         experiment.setStatus("PENDING");
         experiment.setRuntimeConfigJson(configJson);
         experiment.setJudgementSnapshotJson(rulesJson);
-        experiment.setConfigFingerprint(DigestUtils.md5DigestAsHex((configJson + "|" + rulesJson).getBytes(StandardCharsets.UTF_8)));
+        // 指纹纳入安全岗位上下文，避免相同检索开关却使用不同安全 JD 的实验被误判为可比。
+        experiment.setConfigFingerprint(DigestUtils.md5DigestAsHex((configJson + "|" + rulesJson
+                + "|jdSafety=" + safety.decision() + "|jdContext=" + safety.contextFingerprint()).getBytes(StandardCharsets.UTF_8)));
         experiment.setComparisonGroup(blankToNull(request.getComparisonGroup()));
         experimentMapper.insert(experiment);
 
@@ -112,6 +139,7 @@ public class RagExperimentService {
     public void run(Long experimentId) {
         RagExperimentDO experiment = requireExperiment(experimentId);
         long startedAt = System.currentTimeMillis();
+        String harnessRunId = null;
         try {
             experiment.setStatus("RUNNING");
             experiment.setStartedAt(new Date());
@@ -123,17 +151,37 @@ public class RagExperimentService {
             Set<String> allowedIds = items.stream().map(RagExperimentDatasetItemDO::getResumeId)
                     .map(String::valueOf).collect(Collectors.toCollection(LinkedHashSet::new));
             String traceId = "rag-exp-" + experiment.getId();
+            harnessRunId = startHarnessRun(experiment, options, items.size(), traceId);
+            stageHarnessRun(harnessRunId, "JD_SAFETY_CHECK", "岗位描述安全校验完成", jdSafetyMetadata(experiment));
+            if (stopWhenCancelled(harnessRunId, experiment, "检索开始前已取消")) return;
+            checkpoint(harnessRunId, "RAG_RETRIEVE_BEFORE", Map.of("candidateCount", allowedIds.size()));
+            stageHarnessRun(harnessRunId, "RAG_RETRIEVE", "开始执行实验检索", Map.of(
+                    "candidateCount", allowedIds.size(), "ragEnabled", options.ragEnabled()));
             List<ResumeRagMatch> matches = resumeRagService.retrieveExperimentMatches(
                     experiment.getJobDescription(), experiment.getOwnerUserId(), allowedIds, options,
                     traceId);
             Map<String, Object> stageTrace = resumeRagService.consumeExperimentStageTrace(traceId);
             int fallbackStageCount = (int) numeric(stageTrace.get("fallbackStageCount"));
+            checkpoint(harnessRunId, "RAG_RETRIEVE_AFTER", Map.of("resultCount", matches.size(), "fallbackStageCount", fallbackStageCount));
+            if (stopWhenCancelled(harnessRunId, experiment, "检索完成后已取消")) return;
+            stageHarnessRun(harnessRunId, "RAG_RETRIEVE", "实验检索完成", Map.of(
+                    "resultCount", matches.size(), "fallbackStageCount", fallbackStageCount));
             saveResults(experiment, matches, startedAt, stageTrace, fallbackStageCount);
+            stageHarnessRun(harnessRunId, "PERSIST", "实验召回结果已归档", Map.of("resultCount", matches.size()));
+            stageHarnessRun(harnessRunId, "METRIC_CALCULATE", "开始计算检索量化指标", Map.of(
+                    "resultCount", matches.size()));
+            checkpoint(harnessRunId, "METRIC_CALCULATE_BEFORE", Map.of("resultCount", matches.size()));
+            if (stopWhenCancelled(harnessRunId, experiment, "指标计算前已取消")) return;
             RagExperimentMetrics metrics = calculateMetrics(experiment.getId(), options.topK());
             experiment.setMetricSnapshotJson(JSON.toJSONString(metricSnapshot(metrics, System.currentTimeMillis() - startedAt, matches.size(), fallbackStageCount)));
             experiment.setStatus("COMPLETED");
             experiment.setCompletedAt(new Date());
             experimentMapper.updateById(experiment);
+            stageHarnessRun(harnessRunId, "METRIC_CALCULATE", "检索量化指标计算完成", Map.of(
+                    "resultCount", matches.size(), "score", metrics.ndcgAtK()));
+            succeedHarnessRun(harnessRunId, "RAG 实验已完成", Map.of(
+                    "resultCount", matches.size(), "durationMs", System.currentTimeMillis() - startedAt,
+                    "fallbackStageCount", fallbackStageCount));
             log.info("RAG实验完成。实验编号={} 用户编号={} TopK={} Recall@K={} Precision@K={} MRR={} NDCG@K={} 总耗时毫秒={} 降级阶段数={}",
                     experiment.getId(), experiment.getOwnerUserId(), options.topK(), metrics.recallAtK(), metrics.precisionAtK(),
                     metrics.mrr(), metrics.ndcgAtK(), System.currentTimeMillis() - startedAt, 0);
@@ -142,8 +190,130 @@ public class RagExperimentService {
             experiment.setCompletedAt(new Date());
             experiment.setErrorSummary(shortError(ex));
             experimentMapper.updateById(experiment);
+            failHarnessRun(harnessRunId, shortError(ex), Map.of("durationMs", System.currentTimeMillis() - startedAt));
             log.error("RAG实验执行失败。实验编号={}，用户编号={}，原因={}", experimentId, experiment.getOwnerUserId(), shortError(ex), ex);
         }
+    }
+
+    /**
+     * 为实验建立一条可复盘运行总账。输入仅记录候选数量和 Top-K，JD 原文仍只保留在既有实验快照表中，
+     * 以免运维页面和时间线成为新的敏感数据泄露面。
+     */
+    private String startHarnessRun(RagExperimentDO experiment, RagExperimentRuntimeOptions options,
+                                   int candidateCount, String traceId) {
+        if (agentRunCoordinator == null) {
+            return null;
+        }
+        try {
+            return agentRunCoordinator.start(new AgentRunStartCommand(
+                    "RAG_EXPERIMENT", "RAG_EXPERIMENT", experiment.getOwnerUserId(),
+                    String.valueOf(experiment.getId()), "rag-experiment:" + experiment.getId(), traceId,
+                    options.ragEnabled(), "数据集编号=" + experiment.getDatasetId() + ";候选简历数=" + candidateCount
+                    + ";TopK=" + options.topK(), experiment.getConfigFingerprint()));
+        } catch (Exception ex) {
+            log.warn("Harness 运行审计创建失败，继续执行 RAG 实验。实验编号={}", experiment.getId(), ex);
+            return null;
+        }
+    }
+
+    /**
+     * 将一次创建时的安全决策冻结在运行配置快照中。Fastjson 反序列化运行选项时会忽略本字段，
+     * 因此不会改变原有检索开关；而运行总账和实验详情都能复盘安全处理是否发生过过滤或本地兜底。
+     */
+    private String runtimeConfigSnapshot(RagExperimentRuntimeOptions options, JobDescriptionSafetyContext safety) {
+        JSONObject snapshot = JSON.parseObject(JSON.toJSONString(options));
+        snapshot.put("jdSafety", Map.of(
+                "decision", safety.decision().name(),
+                "riskDetected", safety.suspiciousInstructionDetected(),
+                "riskLevel", safety.riskLevel().name(),
+                "riskSignals", safety.riskSignals().stream().map(Enum::name).toList(),
+                "normalizedInputDigest", safety.normalizedInputDigest(),
+                "filteredInstructionCount", safety.filteredInstructionCount(),
+                "structuredFieldsCount", safety.structuredFieldsCount(),
+                "fallbackUsed", safety.fallbackUsed(),
+                "contextFingerprint", safety.contextFingerprint()));
+        return snapshot.toJSONString();
+    }
+
+    /**
+     * 运行时间线仅写入安全统计与岗位上下文指纹。不得把原始 JD、已过滤指令或模型提取的自由文本
+     * 写入监控事件，避免观测系统成为不可信输入的二次传播通道。
+     */
+    private Map<String, Object> jdSafetyMetadata(RagExperimentDO experiment) {
+        try {
+            JSONObject snapshot = JSON.parseObject(experiment.getRuntimeConfigJson());
+            JSONObject safety = snapshot == null ? null : snapshot.getJSONObject("jdSafety");
+            if (safety != null) {
+                return Map.of(
+                        "jdSafetyDecision", safety.getString("decision"),
+                        "jdSafetyRiskDetected", safety.getBooleanValue("riskDetected"),
+                        "riskLevel", Objects.toString(safety.getString("riskLevel"), "UNKNOWN"),
+                        "riskSignals", Optional.ofNullable(safety.getList("riskSignals", String.class)).orElse(List.of()),
+                        "normalizedInputDigest", Objects.toString(safety.getString("normalizedInputDigest"), ""),
+                        "filteredInstructionCount", safety.getIntValue("filteredInstructionCount"),
+                        "structuredFieldsCount", safety.getIntValue("structuredFieldsCount"),
+                        "degraded", safety.getBooleanValue("fallbackUsed"),
+                        "contextFingerprint", safety.getString("contextFingerprint"));
+            }
+        } catch (Exception ex) {
+            log.warn("RAG 实验安全快照读取失败，按安全未知状态继续执行。实验编号={}", experiment.getId(), ex);
+        }
+        return Map.of(
+                "jdSafetyDecision", "UNKNOWN",
+                "jdSafetyRiskDetected", false,
+                "filteredInstructionCount", 0,
+                "structuredFieldsCount", 0,
+                "degraded", true);
+    }
+
+    private void stageHarnessRun(String runId, String stageCode, String message, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.stage(runId, stageCode, message, metadata);
+        } catch (Exception ex) {
+            log.warn("Harness 阶段审计写入失败，继续执行 RAG 实验。运行编号={} 阶段={}", runId, stageCode, ex);
+        }
+    }
+
+    private void succeedHarnessRun(String runId, String resultSummary, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.succeed(runId, resultSummary, metadata);
+        } catch (Exception ex) {
+            log.warn("Harness 成功审计写入失败，继续结束 RAG 实验。运行编号={}", runId, ex);
+        }
+    }
+
+    private void failHarnessRun(String runId, String errorSummary, Map<String, Object> metadata) {
+        if (runId == null || agentRunCoordinator == null) {
+            return;
+        }
+        try {
+            agentRunCoordinator.fail(runId, errorSummary, metadata);
+        } catch (Exception auditEx) {
+            log.warn("Harness 失败审计写入失败，保留原始 RAG 实验失败状态。运行编号={}", runId, auditEx);
+        }
+    }
+
+    /** 协作式取消仅在 RAG 阶段边界生效，不强行中断正在运行的模型或向量请求。 */
+    private boolean stopWhenCancelled(String runId, RagExperimentDO experiment, String reason) {
+        if (runId == null || checkpointService == null || !checkpointService.isCancellationRequested(runId)) return false;
+        experiment.setStatus("CANCELLED");
+        experiment.setCompletedAt(new Date());
+        experiment.setErrorSummary(reason);
+        experimentMapper.updateById(experiment);
+        checkpointService.confirmCancelled(runId, reason);
+        return true;
+    }
+
+    private void checkpoint(String runId, String checkpointCode, Map<String, Object> metadata) {
+        if (runId == null || checkpointService == null) return;
+        try { checkpointService.checkpoint(runId, checkpointCode, metadata); }
+        catch (Exception ex) { log.warn("Harness 检查点写入失败，继续执行 RAG 实验。运行编号={} 阶段={}", runId, checkpointCode, ex); }
     }
 
     @Transactional(rollbackFor = Exception.class)

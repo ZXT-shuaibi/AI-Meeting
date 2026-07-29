@@ -11,6 +11,7 @@ import com.hewei.hzyjy.xunzhi.career.skill.CareerSkill;
 import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
 import com.hewei.hzyjy.xunzhi.career.skill.ClasspathCareerSkillRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.util.List;
 import java.util.Map;
@@ -22,6 +23,15 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AiScoredCvTailorTest {
+
+    @Test
+    void exposesExactlyOneAutowiredConstructorForSpringStartup() {
+        long autowiredConstructors = java.util.Arrays.stream(AiScoredCvTailor.class.getDeclaredConstructors())
+                .filter(constructor -> constructor.isAnnotationPresent(Autowired.class))
+                .count();
+
+        assertEquals(1L, autowiredConstructors);
+    }
 
     @Test
     void injectsTailorSkillPromptIntoSpringAiFallback() {
@@ -83,6 +93,30 @@ class AiScoredCvTailorTest {
         assertTrue(captured.get().systemPrompt().contains("CvBO"));
         assertTrue(captured.get().systemPrompt().contains("LocaleConfig.sectionLabels"));
         assertTrue(captured.get().systemPrompt().contains("yyyy-MM-dd"));
+    }
+
+    @Test
+    void rendersSafeJobProfileInTailorUserPromptInsteadOfSystemPrompt() {
+        AtomicReference<AiPromptRequest> captured = new AtomicReference<>();
+        AiScoredCvTailor tailor = new AiScoredCvTailor(request -> {
+            captured.set(request);
+            return AiGatewayResult.builder()
+                    .content("{\"title\":\"Java Backend Engineer\",\"summary\":\"Tailored summary\"}")
+                    .provider("test")
+                    .build();
+        });
+
+        tailor.tailor(
+                CvBO.builder().summary("java backend").build(),
+                "目标岗位：Java 后端工程师\n核心技能：Spring Boot、MySQL",
+                new CvReview(0.78, "Add stronger metrics."),
+                List.of("template")
+        );
+
+        assertTrue(captured.get().userPrompt().contains("<job_profile>"));
+        assertTrue(captured.get().userPrompt().contains("Spring Boot"));
+        assertTrue(captured.get().userPrompt().contains("MySQL"));
+        assertTrue(!captured.get().systemPrompt().contains("Spring Boot"));
     }
 
     @Test

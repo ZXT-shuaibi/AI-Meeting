@@ -529,6 +529,7 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
         snapshot.put("turns", turns);
         snapshot.put("radar", radarChart);
         snapshot.put("reviewFeedback", buildReviewFeedback(
+                session.getUserId(),
                 session.getSessionId(),
                 interviewDirection,
                 turns,
@@ -655,12 +656,14 @@ public class InterviewRecordServiceImpl extends ServiceImpl<InterviewRecordMappe
     }
 
     private InterviewReviewFeedbackRespDTO buildReviewFeedback(
+            Long userId,
             String sessionId,
             String interviewDirection,
             List<InterviewTurnLog> turns,
             RadarChartDTO radarChart,
             String interviewSuggestions) {
         InterviewReviewFeedbackRespDTO generated = interviewReportAiReviewer.review(
+                userId,
                 sessionId,
                 interviewDirection,
                 turns,
