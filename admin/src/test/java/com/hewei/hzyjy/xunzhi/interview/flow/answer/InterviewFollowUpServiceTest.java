@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
 class InterviewFollowUpServiceTest {
 
     @Test
-    void doesNotSendHistoryProjectionToCurrentFollowUpWorkflow() throws Exception {
+    void sendsHistoryProjectionToPublishedFollowUpWorkflow() throws Exception {
         BusinessAgentResolver resolver = mock(BusinessAgentResolver.class);
         InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
         InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
@@ -55,7 +55,9 @@ class InterviewFollowUpServiceTest {
         ArgumentCaptor<Map<String, Object>> parameters = ArgumentCaptor.forClass(Map.class);
         verify(aiInvoker).callAiSyncWithParameters(eq("session-1"), eq(agent), parameters.capture(), anyString(), any());
         assertTrue(result.hasQuestion());
-        assertFalse(parameters.getValue().containsKey("interview_history_context"));
+        assertTrue(parameters.getValue().containsKey("interview_history_context"));
+        assertTrue(String.valueOf(parameters.getValue().get("interview_history_context"))
+                .contains("assessed_question_numbers"));
         assertFalse(String.valueOf(parameters.getValue().get("resume_context")).contains("uncovered_question_numbers"));
     }
 

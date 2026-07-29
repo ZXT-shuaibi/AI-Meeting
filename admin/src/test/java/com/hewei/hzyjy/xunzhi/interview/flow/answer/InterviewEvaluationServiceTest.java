@@ -42,7 +42,7 @@ class InterviewEvaluationServiceTest {
     }
 
     @Test
-    void doesNotSendHistoryProjectionToCurrentScorerWorkflow() throws Exception {
+    void sendsHistoryProjectionToPublishedScorerWorkflow() throws Exception {
         InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
         InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
         InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
@@ -65,7 +65,9 @@ class InterviewEvaluationServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> parameters = ArgumentCaptor.forClass(Map.class);
         verify(aiInvoker).callAiSyncWithParameters(anyString(), eq(agent), parameters.capture(), anyString(), any());
-        assertFalse(parameters.getValue().containsKey("interview_history_context"));
+        assertTrue(parameters.getValue().containsKey("interview_history_context"));
+        assertTrue(String.valueOf(parameters.getValue().get("interview_history_context"))
+                .contains("assessed_question_numbers"));
         assertEquals("Java backend developer", parameters.getValue().get("resume_context"));
     }
 

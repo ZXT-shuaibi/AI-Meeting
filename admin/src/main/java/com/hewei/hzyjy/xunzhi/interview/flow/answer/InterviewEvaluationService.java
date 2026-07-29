@@ -215,6 +215,7 @@ public class InterviewEvaluationService {
         parameters.put(KEY_AGENT_USER_INPUT, answerContent);
         parameters.put(KEY_QUESTION, questionContent);
         parameters.put(KEY_RESUME_CONTEXT, resumeContextText);
+        parameters.put(KEY_INTERVIEW_HISTORY_CONTEXT, historyContextText);
         return parameters;
     }
 

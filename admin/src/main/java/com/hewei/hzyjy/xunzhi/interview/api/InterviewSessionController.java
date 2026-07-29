@@ -100,12 +100,13 @@ public class InterviewSessionController {
     @PostMapping("/sessions/{sessionId}/interview/answer")
     public Result<InterviewAnswerRespDTO> answerInterviewQuestion(
             @PathVariable String sessionId,
-            @NotBlank(message = "questionNumber cannot be blank")
-            @Size(max = 32, message = "questionNumber length must be less than or equal to 32")
+            @NotBlank(message = "题号不能为空")
+            @Size(max = 32, message = "题号长度不能超过 32 个字符")
             @RequestParam("questionNumber") String questionNumber,
-            @NotBlank(message = "answerContent cannot be blank")
-            @Size(max = 5000, message = "answerContent length must be less than or equal to 5000")
+            @NotBlank(message = "回答内容不能为空")
+            @Size(max = 5000, message = "回答内容长度不能超过 5000 个字符")
             @RequestParam("answerContent") String answerContent,
+            @Size(max = 64, message = "请求幂等标识长度不能超过 64 个字符")
             @RequestParam(value = "requestId", required = false) String requestId,
             @CurrentUser UserContext currentUser) {
         InterviewAnswerReqDTO requestParam = new InterviewAnswerReqDTO();

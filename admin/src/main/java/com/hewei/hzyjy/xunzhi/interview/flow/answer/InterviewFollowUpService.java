@@ -179,6 +179,7 @@ public class InterviewFollowUpService {
         parameters.put(KEY_MAX_FOLLOW_UP, maxFollowUp);
         parameters.put(KEY_QUESTION, currentQuestion);
         parameters.put(KEY_RESUME_CONTEXT, resumeContextText);
+        parameters.put(KEY_INTERVIEW_HISTORY_CONTEXT, historyContextText);
         return parameters;
     }
 

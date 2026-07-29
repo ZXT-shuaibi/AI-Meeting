@@ -12,7 +12,10 @@ import org.springframework.stereotype.Service;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Idempotency state manager for interview answer requests.
+ * 面试答题请求的幂等状态管理器。
+ *
+ * <p>处理态用于阻止同一请求并发重复评分，回放态用于在网络重试时复用已成功的结果；
+ * 两类状态均存于 Redis 并带过期时间，不承担面试会话的长期事实存储职责。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -24,6 +27,10 @@ public class InterviewAnswerIdempotencyService {
     private final StringRedisTemplate stringRedisTemplate;
     private final InterviewAnswerGuardConfiguration configuration;
 
+    /**
+     * 尝试占用一次答题请求：优先返回可回放结果，其次原子创建处理锁；
+     * 已被其他请求占用时仅返回处理中，调用方不得重复触发模型评分。
+     */
     public TryStartResult tryStart(String sessionId, String requestId) {
         if (StrUtil.isBlank(sessionId) || StrUtil.isBlank(requestId)) {
             return TryStartResult.newRequest();

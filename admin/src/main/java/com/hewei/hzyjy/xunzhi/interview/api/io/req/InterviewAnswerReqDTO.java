@@ -7,16 +7,16 @@ import lombok.Data;
 @Data
 public class InterviewAnswerReqDTO {
 
-    @NotBlank(message = "questionNumber cannot be blank")
-    @Size(max = 32, message = "questionNumber length must be less than or equal to 32")
+    @NotBlank(message = "题号不能为空")
+    @Size(max = 32, message = "题号长度不能超过 32 个字符")
     private String questionNumber;
 
-    @NotBlank(message = "answerContent cannot be blank")
-    @Size(max = 5000, message = "answerContent length must be less than or equal to 5000")
+    @NotBlank(message = "回答内容不能为空")
+    @Size(max = 5000, message = "回答内容长度不能超过 5000 个字符")
     private String answerContent;
 
     private String sessionId;
 
-    @Size(max = 64, message = "requestId length must be less than or equal to 64")
+    @Size(max = 64, message = "请求幂等标识长度不能超过 64 个字符")
     private String requestId;
 }
