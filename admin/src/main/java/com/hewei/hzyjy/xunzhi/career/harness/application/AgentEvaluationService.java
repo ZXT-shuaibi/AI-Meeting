@@ -13,6 +13,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +30,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AgentEvaluationService {
     private static final List<String> METRICS = List.of("recallAtK", "precisionAtK", "mrr", "ndcgAtK", "strongRecallAtK", "totalDurationMs", "fallbackStageCount");
+    private static final String EVALUATION_SCOPE_KEY = "evaluationScope";
     private final RagExperimentMapper experimentMapper;
     private final AgentEvaluationBaselineMapper baselineMapper;
     private final AgentRunMapper runMapper;
@@ -40,7 +43,10 @@ public class AgentEvaluationService {
         baseline.setSceneCode("RAG_EXPERIMENT");
         baseline.setSourceExperimentId(experiment.getId());
         baseline.setConfigFingerprint(experiment.getConfigFingerprint());
-        baseline.setRuntimeConfigJson(experiment.getRuntimeConfigJson());
+        baseline.setRuntimeConfigJson(JSON.toJSONString(Map.of(
+                "schemaVersion", 2,
+                "runtimeOptions", jsonMap(experiment.getRuntimeConfigJson()),
+                EVALUATION_SCOPE_KEY, evaluationScope(experiment))));
         baseline.setMetricSnapshotJson(experiment.getMetricSnapshotJson());
         baselineMapper.insert(baseline);
         return baseline;
@@ -51,6 +57,14 @@ public class AgentEvaluationService {
         if (baseline == null || !"RAG_EXPERIMENT".equals(baseline.getSceneCode())) throw new ClientException("RAG 评测基线不存在或已删除");
         RagExperimentDO current = requireCompletedExperiment(experimentId);
         if (!Objects.equals(baseline.getOwnerUserId(), current.getOwnerUserId())) throw new ClientException("只能比较同一用户实验空间内的 RAG 实验");
+        Map<String, Object> baselineScope = baselineScope(baseline.getRuntimeConfigJson());
+        Map<String, Object> currentScope = evaluationScope(current);
+        if (baselineScope.isEmpty()) {
+            throw new ClientException("该基线创建于评测范围冻结功能之前，请重新创建基线后再比较");
+        }
+        if (!Objects.equals(baselineScope, currentScope)) {
+            throw new ClientException("只能比较测试集、JD、人工真值规则和 Top-K 完全一致的 RAG 实验");
+        }
         Map<String, Object> before = jsonMap(baseline.getMetricSnapshotJson());
         Map<String, Object> after = jsonMap(current.getMetricSnapshotJson());
         Map<String, Double> deltas = new LinkedHashMap<>();
@@ -87,6 +101,26 @@ public class AgentEvaluationService {
     private RagExperimentDO requireCompletedExperiment(Long id) { RagExperimentDO item = experimentMapper.selectById(id); if (item == null || !"COMPLETED".equals(item.getStatus())) throw new ClientException("只能将已完成的 RAG 实验固化为评测基线或参与对比"); return item; }
     private String normalizeName(String value) { if (value == null || value.isBlank()) throw new ClientException("评测基线名称不能为空"); return value.trim().substring(0, Math.min(100, value.trim().length())); }
     @SuppressWarnings("unchecked") private Map<String, Object> jsonMap(String value) { try { Map<String, Object> result = JSON.parseObject(value, Map.class); return result == null ? Map.of() : result; } catch (Exception ignored) { return Map.of(); } }
+    @SuppressWarnings("unchecked") private Map<String, Object> baselineScope(String runtimeConfigJson) {
+        Object scope = jsonMap(runtimeConfigJson).get(EVALUATION_SCOPE_KEY);
+        return scope instanceof Map<?, ?> values ? new LinkedHashMap<>((Map<String, Object>) values) : Map.of();
+    }
+    private Map<String, Object> evaluationScope(RagExperimentDO experiment) {
+        Map<String, Object> scope = new LinkedHashMap<>();
+        scope.put("datasetId", String.valueOf(experiment.getDatasetId()));
+        scope.put("jobDescriptionSha256", sha256(experiment.getJobDescription()));
+        scope.put("judgementSnapshotSha256", sha256(experiment.getJudgementSnapshotJson()));
+        scope.put("topK", experiment.getTopK() == null ? 0 : experiment.getTopK());
+        return scope;
+    }
+    private String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("JDK 未提供 SHA-256 摘要算法", ex);
+        }
+    }
     private double number(Object value) { return value instanceof Number number ? number.doubleValue() : 0D; }
     private long percentile(List<Long> sorted, double p) { return sorted.isEmpty() ? 0L : sorted.get(Math.min(sorted.size() - 1, Math.max(0, (int) Math.ceil(sorted.size() * p) - 1))); }
 }

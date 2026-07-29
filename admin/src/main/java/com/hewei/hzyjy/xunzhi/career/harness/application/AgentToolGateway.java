@@ -33,12 +33,31 @@ public class AgentToolGateway {
         if (command == null || command.toolCode() == null || command.callerUserId() == null || command.resourceId() == null || command.resourceId().isBlank()) {
             throw new ClientException("工具调用参数不完整或工具不在白名单中");
         }
-        Map<String, Object> result = switch (command.toolCode()) {
-            case READ_RAG_EXPERIMENT_SUMMARY -> readRagExperiment(command.callerUserId(), parseLong(command.resourceId()));
-            case READ_AGENT_RUN_SUMMARY -> readAgentRun(command.callerUserId(), command.resourceId().trim());
-        };
-        audit(command, true, result.size());
-        return result;
+        verifyParentRunOwnership(command.callerUserId(), command.parentRunId());
+        try {
+            Map<String, Object> result = switch (command.toolCode()) {
+                case READ_RAG_EXPERIMENT_SUMMARY -> readRagExperiment(command.callerUserId(), parseLong(command.resourceId()));
+                case READ_AGENT_RUN_SUMMARY -> readAgentRun(command.callerUserId(), command.resourceId().trim());
+            };
+            audit(command, true, result.size());
+            return result;
+        } catch (ClientException ex) {
+            // 父运行已验证为调用者本人时，拒绝事件可安全回写到同一条时间线；绝不携带资源内容或异常详情。
+            audit(command, false, 0);
+            throw ex;
+        }
+    }
+
+    /** 父运行仅用于关联当前用户已授权的时间线，不能成为向他人运行写入事件的通道。 */
+    private void verifyParentRunOwnership(Long callerUserId, String parentRunId) {
+        if (parentRunId == null || parentRunId.isBlank()) return;
+        AgentRunDO parentRun = runMapper.selectList(Wrappers.<AgentRunDO>lambdaQuery()
+                        .eq(AgentRunDO::getRunId, parentRunId.trim())
+                        .last("LIMIT 1"))
+                .stream().findFirst().orElse(null);
+        if (parentRun == null || !Objects.equals(callerUserId, parentRun.getUserId())) {
+            throw new ClientException("无权关联指定的 Agent 运行记录");
+        }
     }
 
     private Map<String, Object> readRagExperiment(Long caller, Long experimentId) {
@@ -61,7 +80,8 @@ public class AgentToolGateway {
 
     private void audit(AgentToolCommand command, boolean success, int outputFieldCount) {
         if (coordinator == null || command.parentRunId() == null || command.parentRunId().isBlank()) return;
-        try { coordinator.stage(command.parentRunId(), "TOOL_" + command.toolCode().name(), "已完成受控只读工具调用", Map.of("resultCount", outputFieldCount, "success", success)); }
+        String message = success ? "已完成受控只读工具调用" : "受控只读工具调用已被权限校验拒绝";
+        try { coordinator.stage(command.parentRunId(), "TOOL_" + command.toolCode().name(), message, Map.of("resultCount", outputFieldCount, "success", success)); }
         catch (Exception ignored) { /* 工具审计不可影响主工具读取结果。 */ }
     }
     private Long parseLong(String value) { try { return Long.valueOf(value.trim()); } catch (Exception ignored) { return null; } }

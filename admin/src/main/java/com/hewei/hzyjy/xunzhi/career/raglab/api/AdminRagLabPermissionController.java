@@ -6,6 +6,7 @@ import com.hewei.hzyjy.xunzhi.career.raglab.api.io.RagLabPermissionReqDTO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.entity.RagLabPermissionDO;
 import com.hewei.hzyjy.xunzhi.career.raglab.dao.mapper.RagLabPermissionMapper;
 import com.hewei.hzyjy.xunzhi.common.convention.annotation.CurrentUser;
+import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Result;
 import com.hewei.hzyjy.xunzhi.common.convention.result.Results;
 import com.hewei.hzyjy.xunzhi.user.dao.entity.UserDO;
@@ -62,6 +63,11 @@ public class AdminRagLabPermissionController {
             @PathVariable Long userId,
             @Valid @RequestBody RagLabPermissionReqDTO request,
             @CurrentUser Long adminUserId) {
+        // 权限记录必须绑定真实账号。先校验用户存在，避免前端传错雪花 ID 时写入孤儿授权记录，
+        // 也避免后续账号创建后意外继承历史上错误写入的实验室权限。
+        if (userMapper.selectById(userId) == null) {
+            throw new ClientException("待授权用户不存在或已删除");
+        }
         RagLabPermissionDO record = permissionMapper.selectOne(Wrappers.lambdaQuery(RagLabPermissionDO.class)
                 .eq(RagLabPermissionDO::getUserId, userId).last("LIMIT 1"));
         if (record == null) {

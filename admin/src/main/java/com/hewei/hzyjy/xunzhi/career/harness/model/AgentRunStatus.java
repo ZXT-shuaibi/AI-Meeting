@@ -9,6 +9,8 @@ package com.hewei.hzyjy.xunzhi.career.harness.model;
 public enum AgentRunStatus {
     QUEUED,
     RUNNING,
+    /** 已收到管理员取消意图，业务将在下一安全检查点确认停止。 */
+    CANCEL_REQUESTED,
     SUCCEEDED,
     FAILED,
     CANCELLED,

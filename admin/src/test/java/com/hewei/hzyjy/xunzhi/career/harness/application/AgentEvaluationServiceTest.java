@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -62,9 +63,38 @@ class AgentEvaluationServiceTest {
         assertEquals(100D, resumeQuality.get("ragUsageRate"));
     }
 
+    @Test
+    void rejectsComparisonWhenExperimentsUseDifferentDataset() {
+        RagExperimentMapper experimentMapper = mock(RagExperimentMapper.class);
+        AgentEvaluationBaselineMapper baselineMapper = mock(AgentEvaluationBaselineMapper.class);
+        AgentRunMapper runMapper = mock(AgentRunMapper.class);
+        RagExperimentDO source = experiment(10L, 7L, "COMPLETED", 0.70D, 0.60D, 1_200L);
+        RagExperimentDO differentDataset = experiment(11L, 7L, "COMPLETED", 0.80D, 0.75D, 1_000L);
+        source.setDatasetId(100L);
+        differentDataset.setDatasetId(101L);
+        source.setJobDescription("Java 后端岗位");
+        differentDataset.setJobDescription("Java 后端岗位");
+        source.setJudgementSnapshotJson("[{\"tag\":\"后端\",\"score\":3}]");
+        differentDataset.setJudgementSnapshotJson(source.getJudgementSnapshotJson());
+        when(experimentMapper.selectById(10L)).thenReturn(source);
+        when(experimentMapper.selectById(11L)).thenReturn(differentDataset);
+        doAnswer(invocation -> { ((AgentEvaluationBaselineDO) invocation.getArgument(0)).setId(99L); return 1; })
+                .when(baselineMapper).insert(any(AgentEvaluationBaselineDO.class));
+        AgentEvaluationService service = new AgentEvaluationService(experimentMapper, baselineMapper, runMapper);
+
+        AgentEvaluationBaselineDO baseline = service.createRagBaseline("后端基线", 10L);
+        when(baselineMapper.selectById(99L)).thenReturn(baseline);
+
+        assertThrows(com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException.class,
+                () -> service.compareRagExperiment(99L, 11L),
+                "不同测试集的指标不能作为算法效果差异进行比较");
+    }
+
     private RagExperimentDO experiment(Long id, Long owner, String status, double recall, double ndcg, long durationMs) {
         RagExperimentDO item = new RagExperimentDO();
         item.setId(id); item.setOwnerUserId(owner); item.setStatus(status);
+        item.setDatasetId(100L); item.setTopK(3); item.setJobDescription("Java 后端岗位");
+        item.setJudgementSnapshotJson("[{\"tag\":\"后端\",\"score\":3}]");
         item.setName("实验-" + id); item.setRuntimeConfigJson("{\"rerankEnabled\":true}");
         item.setConfigFingerprint("cfg-" + id);
         item.setMetricSnapshotJson(JSON.toJSONString(Map.of("recallAtK", recall, "ndcgAtK", ndcg, "totalDurationMs", durationMs, "precisionAtK", recall, "mrr", recall, "strongRecallAtK", recall, "fallbackStageCount", 0)));

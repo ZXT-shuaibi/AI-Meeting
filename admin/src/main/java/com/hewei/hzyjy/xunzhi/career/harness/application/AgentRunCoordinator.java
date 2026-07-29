@@ -60,32 +60,57 @@ public class AgentRunCoordinator {
     }
 
     public void succeed(String runId, String resultSummary, Map<String, Object> metadata) {
-        finish(runId, AgentRunStatus.SUCCEEDED, resultSummary, null, metadata);
-        enqueueCompletionNotification(runId);
+        if (finish(runId, AgentRunStatus.SUCCEEDED, resultSummary, null, metadata)) {
+            enqueueCompletionNotification(runId);
+        }
     }
 
     public void fail(String runId, String errorMessage, Map<String, Object> metadata) {
         finish(runId, AgentRunStatus.FAILED, null, errorMessage, metadata);
     }
 
-    private void finish(
+    private boolean finish(
             String runId, AgentRunStatus status, String resultSummary, String errorMessage, Map<String, Object> metadata) {
         Date now = new Date();
+        AgentRunDO existing = agentRunMapper.selectList(Wrappers.<AgentRunDO>lambdaQuery()
+                        .eq(AgentRunDO::getRunId, runId)
+                        .last("LIMIT 1"))
+                .stream().findFirst().orElse(null);
+        // 取消是协作式请求：部分旧业务链路尚未在每个外部调用后检查取消标记。
+        // 这类任务返回时不能再把 CANCEL_REQUESTED 覆盖为成功或失败，否则运行会永久卡在“取消请求中”。
+        boolean cancellationPending = existing != null
+                && AgentRunStatus.CANCEL_REQUESTED.name().equals(existing.getStatus());
+        AgentRunStatus terminalStatus = cancellationPending ? AgentRunStatus.CANCELLED : status;
         AgentRunDO update = new AgentRunDO();
-        update.setStatus(status.name());
-        update.setResultSummary(resultSummary);
-        update.setErrorMessage(errorMessage);
+        update.setStatus(terminalStatus.name());
+        update.setResultSummary(cancellationPending ? null : resultSummary);
+        update.setErrorMessage(cancellationPending
+                ? (existing.getErrorMessage() == null ? "管理员请求取消，已在任务返回后确认取消" : existing.getErrorMessage())
+                : errorMessage);
         update.setFinishedAt(now);
+        update.setDurationMs(existing == null || existing.getStartedAt() == null
+                ? 0L
+                : Math.max(0L, now.getTime() - existing.getStartedAt().getTime()));
         update.setMetadataJson(JSON.toJSONString(metadata == null ? Map.of() : metadata));
-        agentRunMapper.update(update, Wrappers.<AgentRunDO>lambdaUpdate().eq(AgentRunDO::getRunId, runId));
+        int affected = agentRunMapper.update(update, Wrappers.<AgentRunDO>lambdaUpdate()
+                .eq(AgentRunDO::getRunId, runId)
+                .eq(AgentRunDO::getStatus, cancellationPending
+                        ? AgentRunStatus.CANCEL_REQUESTED.name()
+                        : AgentRunStatus.RUNNING.name()));
+        if (affected <= 0) {
+            return false;
+        }
         appendEvent(
                 runId,
-                status == AgentRunStatus.SUCCEEDED ? "RUN_FINISHED" : "RUN_FAILED",
+                terminalStatus == AgentRunStatus.CANCELLED ? "RUN_CANCELLED"
+                        : status == AgentRunStatus.SUCCEEDED ? "RUN_FINISHED" : "RUN_FAILED",
                 "RUN",
-                status.name(),
-                status == AgentRunStatus.SUCCEEDED ? resultSummary : errorMessage,
+                terminalStatus.name(),
+                terminalStatus == AgentRunStatus.CANCELLED ? update.getErrorMessage()
+                        : status == AgentRunStatus.SUCCEEDED ? resultSummary : errorMessage,
                 metadata
         );
+        return true;
     }
 
     private void appendEvent(

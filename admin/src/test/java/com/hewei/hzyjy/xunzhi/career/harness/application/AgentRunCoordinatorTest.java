@@ -21,6 +21,25 @@ import static org.mockito.Mockito.when;
 class AgentRunCoordinatorTest {
 
     @Test
+    void confirmsPendingCancellationWhenNonCooperativeRunReturns() {
+        AgentRunMapper runMapper = mock(AgentRunMapper.class);
+        AgentRunEventMapper eventMapper = mock(AgentRunEventMapper.class);
+        AgentRunDO cancellationRequested = new AgentRunDO();
+        cancellationRequested.setRunId("run-1");
+        cancellationRequested.setStatus(AgentRunStatus.CANCEL_REQUESTED.name());
+        cancellationRequested.setStartedAt(new java.util.Date());
+        when(runMapper.selectList(any())).thenReturn(java.util.List.of(cancellationRequested));
+        when(runMapper.update(any(AgentRunDO.class), any())).thenReturn(1);
+
+        AgentRunCoordinator coordinator = new AgentRunCoordinator(runMapper, eventMapper);
+        coordinator.succeed("run-1", "late result", Map.of());
+
+        ArgumentCaptor<AgentRunDO> update = ArgumentCaptor.forClass(AgentRunDO.class);
+        verify(runMapper).update(update.capture(), any());
+        assertEquals(AgentRunStatus.CANCELLED.name(), update.getValue().getStatus());
+    }
+
+    @Test
     void recordsOrderedStagesAndTerminalStatusForOneBusinessRun() {
         AgentRunMapper runMapper = mock(AgentRunMapper.class);
         AgentRunEventMapper eventMapper = mock(AgentRunEventMapper.class);
@@ -58,5 +77,6 @@ class AgentRunCoordinatorTest {
         ArgumentCaptor<AgentRunDO> updatedRunCaptor = ArgumentCaptor.forClass(AgentRunDO.class);
         verify(runMapper).update(updatedRunCaptor.capture(), any());
         assertEquals(AgentRunStatus.SUCCEEDED.name(), updatedRunCaptor.getValue().getStatus());
+        assertNotNull(updatedRunCaptor.getValue().getDurationMs(), "终态运行必须持久化总耗时，供质量中心统一统计");
     }
 }

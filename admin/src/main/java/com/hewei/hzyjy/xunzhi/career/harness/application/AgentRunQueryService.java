@@ -33,7 +33,9 @@ public class AgentRunQueryService {
     private static final int MAX_TEXT_LENGTH = 240;
     private static final Set<String> SAFE_EVENT_METADATA_KEYS = Set.of(
             "resultCount", "candidateCount", "queryCount", "iterations", "score", "scorePassed",
-            "durationMs", "costMs", "ragEnabled", "degraded", "fallbackReason", "fallbackStageCount", "retryCount"
+            "durationMs", "costMs", "ragEnabled", "degraded", "fallbackReason", "fallbackStageCount", "retryCount",
+            "jdSafetyRiskDetected", "filteredInstructionCount", "structuredFieldsCount", "jdSafetyDecision",
+            "riskLevel", "riskSignals", "normalizedInputDigest", "contextFingerprint"
     );
 
     private final AgentRunMapper agentRunMapper;
@@ -57,7 +59,10 @@ public class AgentRunQueryService {
                 .filter(run -> equalsIgnoreCaseOrEmpty(status, run.getStatus()))
                 .filter(run -> inTimeRange(run.getCreateTime(), fromTime, toTime))
                 .toList();
-        int fromIndex = Math.min((normalizedPage - 1) * normalizedSize, filtered.size());
+        // 页码来自请求参数，必须先用 long 计算偏移量。否则 Integer.MAX_VALUE 等极端页码会溢出为负数，
+        // 随后的 subList 会抛出异常；对已经越过总数的页码应稳定返回空列表。
+        long requestedOffset = ((long) normalizedPage - 1L) * normalizedSize;
+        int fromIndex = requestedOffset >= filtered.size() ? filtered.size() : (int) requestedOffset;
         int toIndex = Math.min(fromIndex + normalizedSize, filtered.size());
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -140,6 +145,13 @@ public class AgentRunQueryService {
                     result.put(key, value);
                 } else if (value instanceof String text && hasText(text)) {
                     result.put(key, shorten(text));
+                } else if (value instanceof java.util.Collection<?> values && "riskSignals".equals(key)) {
+                    // Signal names are fixed enums. Keep only enum-shaped values so free text never enters monitoring output.
+                    result.put(key, values.stream()
+                            .map(String::valueOf)
+                            .filter(item -> item.matches("[A-Z_]{1,64}"))
+                            .limit(16)
+                            .toList());
                 }
             }
             return result;

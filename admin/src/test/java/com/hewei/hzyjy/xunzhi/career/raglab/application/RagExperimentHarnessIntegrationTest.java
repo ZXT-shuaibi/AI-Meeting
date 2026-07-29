@@ -73,6 +73,7 @@ class RagExperimentHarnessIntegrationTest {
         assertEquals("88", commandCaptor.getValue().businessId());
         assertEquals("experiment-config-88", commandCaptor.getValue().configFingerprint());
         org.junit.jupiter.api.Assertions.assertFalse(commandCaptor.getValue().inputSummary().contains("Java 后端岗位"));
+        verify(coordinator, atLeastOnce()).stage(eq("agent-run-88"), eq("JD_SAFETY_CHECK"), any(), any());
         verify(coordinator, atLeastOnce()).stage(eq("agent-run-88"), eq("RAG_RETRIEVE"), any(), any());
         verify(coordinator, atLeastOnce()).stage(eq("agent-run-88"), eq("METRIC_CALCULATE"), any(), any());
         verify(coordinator).succeed(eq("agent-run-88"), any(), any());

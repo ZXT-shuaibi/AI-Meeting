@@ -65,6 +65,38 @@ class AgentRunQueryServiceTest {
         assertTrue(events.get(1).get("message").toString().contains("RUN_FINISHED"));
     }
 
+    @Test
+    void exposesOnlyEnumShapedJdSafetySignalsInMonitoringTimeline() {
+        AgentRunMapper runMapper = mock(AgentRunMapper.class);
+        AgentRunEventMapper eventMapper = mock(AgentRunEventMapper.class);
+        when(runMapper.selectList(any())).thenReturn(List.of(run("run-60", "JOB_MATCH", "SUCCEEDED", 7L, 1_000L, 2_500L)));
+        when(eventMapper.selectList(any())).thenReturn(List.of(event("JD_SAFETY_CHECK", 1_200L,
+                "{\"riskLevel\":\"HIGH\",\"riskSignals\":[\"INSTRUCTION_OVERRIDE\",\"secret JD sentence\"],\"normalizedInputDigest\":\"sha256:abc\"}")));
+        AgentRunQueryService service = new AgentRunQueryService(runMapper, eventMapper);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> events = (List<Map<String, Object>>) service.detail("run-60").get("events");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metrics = (Map<String, Object>) events.getFirst().get("metrics");
+
+        assertEquals("HIGH", metrics.get("riskLevel"));
+        assertEquals(List.of("INSTRUCTION_OVERRIDE"), metrics.get("riskSignals"));
+        assertEquals("sha256:abc", metrics.get("normalizedInputDigest"));
+    }
+
+    @Test
+    void returnsEmptyPageForExtremelyLargePageNumberInsteadOfOverflowingSubListIndex() {
+        AgentRunMapper runMapper = mock(AgentRunMapper.class);
+        AgentRunEventMapper eventMapper = mock(AgentRunEventMapper.class);
+        when(runMapper.selectList(any())).thenReturn(List.of(run("run-61", "JOB_MATCH", "SUCCEEDED", 7L, 1_000L, 2_500L)));
+        AgentRunQueryService service = new AgentRunQueryService(runMapper, eventMapper);
+
+        Map<String, Object> result = service.list(Integer.MAX_VALUE, 100, null, null, null, null);
+
+        assertEquals(1L, result.get("total"));
+        assertEquals(List.of(), result.get("items"));
+    }
+
     private AgentRunDO run(String runId, String sceneCode, String status, Long userId, long startedAt, long finishedAt) {
         AgentRunDO run = new AgentRunDO();
         run.setRunId(runId);

@@ -21,4 +21,15 @@ class AgentRunCheckpointServiceTest {
   doAnswer(invocation -> { run.setStatus("CANCELLED"); return 1; }).when(runMapper).update(any(AgentRunDO.class),any());
   service.requestCancel("run-1","用户主动取消"); assertTrue(service.isCancelled("run-1"));
  }
+
+ @Test void doesNotTurnFinishedRunIntoCancelledRun() {
+  AgentRunCheckpointMapper checkpointMapper=mock(AgentRunCheckpointMapper.class); AgentRunMapper runMapper=mock(AgentRunMapper.class);
+  AgentRunDO finished=new AgentRunDO(); finished.setRunId("finished-run"); finished.setStatus("FAILED");
+  when(runMapper.selectList(any())).thenReturn(List.of(finished));
+  AgentRunCheckpointService service=new AgentRunCheckpointService(checkpointMapper,runMapper);
+
+  service.requestCancel("finished-run","管理员请求取消");
+
+  verify(runMapper, never()).update(any(AgentRunDO.class), any());
+ }
 }
