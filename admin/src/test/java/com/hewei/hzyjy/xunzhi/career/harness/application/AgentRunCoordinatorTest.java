@@ -44,6 +44,8 @@ class AgentRunCoordinatorTest {
         AgentRunMapper runMapper = mock(AgentRunMapper.class);
         AgentRunEventMapper eventMapper = mock(AgentRunEventMapper.class);
         when(runMapper.insert(any(AgentRunDO.class))).thenReturn(1);
+        // 终态事件只会在条件更新成功后写入；模拟数据库实际影响一行的返回值。
+        when(runMapper.update(any(AgentRunDO.class), any())).thenReturn(1);
         when(eventMapper.insert(any(AgentRunEventDO.class))).thenReturn(1);
 
         AgentRunCoordinator coordinator = new AgentRunCoordinator(runMapper, eventMapper);
