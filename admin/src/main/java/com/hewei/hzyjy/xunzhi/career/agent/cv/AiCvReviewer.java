@@ -5,7 +5,10 @@ import com.hewei.hzyjy.xunzhi.career.ai.AgentRuntimeGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiGateway;
 import com.hewei.hzyjy.xunzhi.career.ai.AiPromptRequest;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyContext;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyService;
 import com.hewei.hzyjy.xunzhi.career.skill.CareerSkillRegistry;
+import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,38 +27,51 @@ public class AiCvReviewer implements CvReviewer {
     private final AiGateway aiGateway;
     private final ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider;
     private final CareerSkillRegistry skillRegistry;
+    private final JobDescriptionSafetyService jobDescriptionSafetyService;
 
     @Autowired
     public AiCvReviewer(
             AiGateway aiGateway,
             ObjectProvider<AgentRuntimeGateway> agentRuntimeGatewayProvider,
-            ObjectProvider<CareerSkillRegistry> skillRegistryProvider) {
+            ObjectProvider<CareerSkillRegistry> skillRegistryProvider,
+            JobDescriptionSafetyService jobDescriptionSafetyService) {
         this.aiGateway = aiGateway;
         this.agentRuntimeGatewayProvider = agentRuntimeGatewayProvider;
         this.skillRegistry = skillRegistryProvider.getIfAvailable(CareerSkillRegistry::disabled);
+        this.jobDescriptionSafetyService = jobDescriptionSafetyService;
     }
 
     public AiCvReviewer(AiGateway aiGateway) {
-        this(aiGateway, CareerSkillRegistry.disabled());
+        this(aiGateway, CareerSkillRegistry.disabled(), new JobDescriptionSafetyService());
     }
 
     public AiCvReviewer(AiGateway aiGateway, CareerSkillRegistry skillRegistry) {
+        this(aiGateway, skillRegistry, new JobDescriptionSafetyService());
+    }
+
+    AiCvReviewer(AiGateway aiGateway, CareerSkillRegistry skillRegistry, JobDescriptionSafetyService jobDescriptionSafetyService) {
         this.aiGateway = aiGateway;
         this.agentRuntimeGatewayProvider = null;
         this.skillRegistry = skillRegistry == null ? CareerSkillRegistry.disabled() : skillRegistry;
+        this.jobDescriptionSafetyService = jobDescriptionSafetyService == null ? new JobDescriptionSafetyService() : jobDescriptionSafetyService;
     }
 
     @Override
     public CvReview review(CvBO cv, String jobDescription, List<String> referenceTemplates) {
-        String response = tryLangChain4j(cv, jobDescription, referenceTemplates);
+        JobDescriptionSafetyContext safety = jobDescriptionSafetyService.assess(jobDescription);
+        if (safety.rejected()) {
+            throw new ClientException("岗位描述包含与招聘无关的指令性内容，且未识别到有效岗位要求，请修正后重试");
+        }
+        String safeJobDescription = safety.safeRetrievalQuery();
+        String response = tryLangChain4j(cv, safeJobDescription, referenceTemplates);
         if (response == null || response.isBlank()) {
             response = aiGateway.chat(AiPromptRequest.builder()
                     .sceneCode("RESUME_REVIEW")
-                    .systemPrompt(buildSystemPrompt(jobDescription))
-                    .userPrompt(CvPromptTemplates.reviewerUserPrompt(cv, jobDescription, referenceTemplates))
+                    .systemPrompt(buildSystemPrompt(safeJobDescription))
+                    .userPrompt(CvPromptTemplates.reviewerUserPrompt(cv, safeJobDescription, referenceTemplates))
                     .build()).content();
         }
-        double score = AgentResponseParser.score(response).orElseGet(() -> heuristicScore(cv, jobDescription));
+        double score = AgentResponseParser.score(response).orElseGet(() -> heuristicScore(cv, safeJobDescription));
         return CvReview.fromModelResponse(score, response);
     }
 

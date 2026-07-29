@@ -17,6 +17,7 @@ public interface AgenticScoredCvTailorAgent {
     @SystemMessage(fromResource = CvPromptTemplates.TAILOR_SYSTEM_PROMPT_RESOURCE)
     @UserMessage(fromResource = CvPromptTemplates.TAILOR_USER_PROMPT_RESOURCE)
     CvBO tailor(@V("cv") CvBO cv,
+                @V("jobDescription") String jobDescription,
                 @V("cvReview") CvReview cvReview,
                 @V("referenceTemplates") List<String> referenceTemplates);
 }

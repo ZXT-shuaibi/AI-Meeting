@@ -12,6 +12,7 @@ public record CvOptimizationResult(
         int iterations,
         boolean scoreGatePassed,
         String failureReason,
-        List<CvReview> reviewHistory
+        List<CvReview> reviewHistory,
+        String safetyNotice
 ) {
 }

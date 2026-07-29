@@ -19,7 +19,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
         CareerObservabilityProperties.class,
         CareerStorageProperties.class,
         CareerAsyncTaskProperties.class,
-        CareerOptimizationProperties.class
+        CareerOptimizationProperties.class,
+        CareerJobMatchProperties.class,
+        CareerJobDescriptionSafetyProperties.class
 })
 public class CareerConfiguration {
 
