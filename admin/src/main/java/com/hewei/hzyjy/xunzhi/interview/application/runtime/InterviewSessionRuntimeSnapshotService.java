@@ -847,7 +847,7 @@ public class InterviewSessionRuntimeSnapshotService {
         flow.setCurrentQuestionNumber(totalQuestions > 0 ? "1" : null);
         flow.setTotalQuestions(totalQuestions);
         flow.setFollowUpCount(0);
-        flow.setMaxFollowUp(2);
+                flow.setMaxFollowUp(4);
         flow.setVersion(1);
         return flow;
     }
@@ -859,7 +859,7 @@ public class InterviewSessionRuntimeSnapshotService {
         flow.setCurrentQuestionNumber(null);
         flow.setTotalQuestions(Math.max(totalQuestions, 0));
         flow.setFollowUpCount(0);
-        flow.setMaxFollowUp(2);
+                flow.setMaxFollowUp(4);
         flow.setVersion(1);
         return flow;
     }
@@ -872,7 +872,7 @@ public class InterviewSessionRuntimeSnapshotService {
         flow.setCurrentQuestionNumber(normalizeQuestionNumber(questionNumber));
         flow.setTotalQuestions(Math.max(totalQuestions, 0));
         flow.setFollowUpCount(resolveFollowUpCount(questionNumber));
-        flow.setMaxFollowUp(2);
+                flow.setMaxFollowUp(4);
         flow.setVersion(1);
         return flow;
     }
