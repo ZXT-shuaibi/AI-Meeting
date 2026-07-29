@@ -20,7 +20,7 @@ public class InterviewRuleEngineConfiguration {
 
     private String ruleVersion = "v1.0.0";
 
-    private Integer defaultMaxFollowUp = 2;
+    private Integer defaultMaxFollowUp = 4;
 
     private Integer defaultLowScoreThreshold = 60;
 }

@@ -115,13 +115,45 @@ class InterviewFollowUpRuleServiceTest {
         assertThrows(IllegalStateException.class, () -> service.decide(context));
     }
 
+    @Test
+    void allowsFourthFollowUpAndBlocksFifthFollowUp() {
+        FlowExecutor flowExecutor = mock(FlowExecutor.class);
+        InterviewRuleEngineConfiguration configuration = defaultConfiguration();
+        InterviewFollowUpRuleService service = spy(new InterviewFollowUpRuleService(flowExecutor, configuration));
+        LiteflowResponse response = mock(LiteflowResponse.class);
+        when(response.isSuccess()).thenReturn(true);
+        doAnswer(invocation -> {
+            InterviewFollowUpRuleContext context = invocation.getArgument(1);
+            if (context.getFollowUpCount() >= context.getResolvedMaxFollowUp()) {
+                context.markNoFollowUp("FOLLOW_UP_LIMIT_REACHED", "follow-up limit reached");
+            } else {
+                context.markNeedFollowUp("AI_SUGGESTED", "follow-up suggested by ai result");
+            }
+            return response;
+        }).when(service).executeChain(anyString(), any(InterviewFollowUpRuleContext.class));
+
+        InterviewFollowUpRuleContext fourth = new InterviewFollowUpRuleContext();
+        fourth.setMaxFollowUp(0);
+        fourth.setFollowUpCount(3);
+        fourth.setFollowUpNeededFromAi(true);
+        assertTrue(service.decide(fourth).isNeedFollowUp());
+
+        InterviewFollowUpRuleContext fifth = new InterviewFollowUpRuleContext();
+        fifth.setMaxFollowUp(0);
+        fifth.setFollowUpCount(4);
+        fifth.setFollowUpNeededFromAi(true);
+        InterviewFollowUpRuleDecision decision = service.decide(fifth);
+        assertFalse(decision.isNeedFollowUp());
+        assertEquals("FOLLOW_UP_LIMIT_REACHED", decision.getReasonCode());
+    }
+
     private InterviewRuleEngineConfiguration defaultConfiguration() {
         InterviewRuleEngineConfiguration configuration = new InterviewRuleEngineConfiguration();
         configuration.setEnable(true);
         configuration.setFailOpen(true);
         configuration.setRuleVersion("v1.0.0");
         configuration.setDefaultChainId("default_followup_chain");
-        configuration.setDefaultMaxFollowUp(2);
+        configuration.setDefaultMaxFollowUp(4);
         configuration.setDefaultLowScoreThreshold(60);
         return configuration;
     }

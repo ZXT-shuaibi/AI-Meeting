@@ -32,6 +32,7 @@ public class InterviewFollowUpService {
     private static final String KEY_QUESTION = "question";
     private static final String KEY_RESUME_CONTEXT = "resume_context";
     private static final String KEY_INTERVIEW_HISTORY_CONTEXT = "interview_history_context";
+    private static final String KEY_FOLLOW_UP_QUESTION = "follow_up_question";
     private static final String KEY_ASK_TO_USER = "ask_to_user";
     private static final String KEY_END_INTERVIEW = "end_interview";
 
@@ -53,7 +54,7 @@ public class InterviewFollowUpService {
 
         // 1) 先做追问次数与输入兜底，超过上限直接停止追问。
         int safeCurrentFollowUpCount = Math.max(0, currentFollowUpCount == null ? 0 : currentFollowUpCount);
-        int safeMaxFollowUp = maxFollowUp == null || maxFollowUp <= 0 ? 2 : maxFollowUp;
+        int safeMaxFollowUp = maxFollowUp == null || maxFollowUp <= 0 ? 4 : maxFollowUp;
         String sanitizedFallbackQuestion = sanitizeFollowUpQuestion(fallbackFollowUpQuestion);
         if (safeCurrentFollowUpCount >= safeMaxFollowUp) {
             return FollowUpQuestionResult.empty();
@@ -74,6 +75,7 @@ public class InterviewFollowUpService {
                     requestId,
                     currentQuestion,
                     answerContent,
+                    sanitizedFallbackQuestion,
                     safeCurrentFollowUpCount,
                     safeMaxFollowUp,
                     agentProperties
@@ -96,6 +98,7 @@ public class InterviewFollowUpService {
             String requestId,
             String currentQuestion,
             String answerContent,
+            String suggestedFollowUpQuestion,
             int currentFollowUpCount,
             int maxFollowUp,
             AgentPropertiesDO agentProperties) {
@@ -105,10 +108,11 @@ public class InterviewFollowUpService {
         }
 
         try {
-            InterviewHistoryContext historyContext = interviewHistoryContextProvider.load(sessionId);
+            InterviewHistoryContext historyContext = loadHistoryContextSafely(sessionId);
             Map<String, Object> parameters = buildWorkflowParameters(
                     answerContent,
                     currentQuestion,
+                    suggestedFollowUpQuestion,
                     currentFollowUpCount,
                     maxFollowUp,
                     buildResumeContextText(interviewQuestionCacheService.getSessionResumeContext(sessionId)),
@@ -168,6 +172,7 @@ public class InterviewFollowUpService {
     private Map<String, Object> buildWorkflowParameters(
             String answerContent,
             String currentQuestion,
+            String suggestedFollowUpQuestion,
             int currentFollowUpCount,
             int maxFollowUp,
             String resumeContextText,
@@ -180,7 +185,30 @@ public class InterviewFollowUpService {
         parameters.put(KEY_QUESTION, currentQuestion);
         parameters.put(KEY_RESUME_CONTEXT, resumeContextText);
         parameters.put(KEY_INTERVIEW_HISTORY_CONTEXT, historyContextText);
+        parameters.put(KEY_FOLLOW_UP_QUESTION, sanitizeFollowUpQuestion(suggestedFollowUpQuestion));
         return parameters;
+    }
+
+    /**
+     * 历史投影只用于避免重复验证，读取异常不能阻断当前追问的生成。
+     *
+     * <p>历史快照可能因存储瞬时超时不可用；此时返回空历史，仍由当前题目、回答、简历和评分官建议问题驱动追问。</p>
+     */
+    private InterviewHistoryContext loadHistoryContextSafely(String sessionId) {
+        try {
+            InterviewHistoryContext historyContext = interviewHistoryContextProvider.load(sessionId);
+            if (historyContext != null) {
+                return historyContext;
+            }
+            log.warn("面试历史上下文为空，已降级为空历史继续生成追问，sessionId={}", sessionId);
+        } catch (Exception ex) {
+            log.warn(
+                    "面试历史上下文读取失败，已降级为空历史继续生成追问，sessionId={}，异常类型={}",
+                    sessionId,
+                    ex.getClass().getSimpleName()
+            );
+        }
+        return InterviewHistoryContext.empty();
     }
 
     private String buildResumeContextText(Map<String, Object> resumeContext) {
@@ -206,10 +234,12 @@ public class InterviewFollowUpService {
                 || "__FINISH__".equalsIgnoreCase(normalized)) {
             return null;
         }
-        if (!normalized.endsWith("?")) {
-            normalized = normalized + "?";
+        // 同时兼容模型返回的中英文问号，并将结果统一为一个中文问号，避免出现“？?”。
+        normalized = normalized.replaceAll("[?？]+$", "").trim();
+        if (StrUtil.isBlank(normalized)) {
+            return null;
         }
-        return clip(normalized, 100);
+        return clip(normalized, 99) + "？";
     }
 
     private String resolveMainQuestionNumber(String questionNumber) {

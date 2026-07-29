@@ -8,5 +8,5 @@ xunzhi-agent:
       default-chain-id: default_followup_chain
       fail-open: true
       rule-version: v1.0.0
-      default-max-follow-up: 2
+  default-max-follow-up: 4
       default-low-score-threshold: 60
