@@ -2,6 +2,7 @@ package com.hewei.hzyjy.xunzhi.career.resume.application;
 
 import com.alibaba.fastjson2.JSON;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationOrchestrator;
+import com.hewei.hzyjy.xunzhi.career.config.CareerJobMatchProperties;
 import com.hewei.hzyjy.xunzhi.career.agent.cv.CvOptimizationResult;
 import com.hewei.hzyjy.xunzhi.career.harness.application.AgentRunCoordinator;
 import com.hewei.hzyjy.xunzhi.career.harness.model.AgentRunStartCommand;
@@ -17,12 +18,16 @@ import com.hewei.hzyjy.xunzhi.career.observability.AiToolExecutionEvent;
 import com.hewei.hzyjy.xunzhi.career.observability.AiTracePublisher;
 import com.hewei.hzyjy.xunzhi.career.resume.model.CvBO;
 import com.hewei.hzyjy.xunzhi.career.raglab.application.RagResumeAutoTagService;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyContext;
+import com.hewei.hzyjy.xunzhi.career.security.JobDescriptionSafetyService;
 import com.hewei.hzyjy.xunzhi.career.resume.model.SkillBO;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeChunk;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagMatch;
 import com.hewei.hzyjy.xunzhi.career.resume.rag.ResumeRagService;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderArtifact;
 import com.hewei.hzyjy.xunzhi.career.resume.render.ResumeRenderService;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +36,7 @@ import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
+import com.hewei.hzyjy.xunzhi.common.convention.exception.ClientException;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -51,7 +57,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -71,6 +76,8 @@ public class ResumeApplicationService {
     private static final int MAX_JD_LENGTH = 12000;
     private static final int MAX_QUESTION_LENGTH = 4000;
     private static final int MAX_ANSWER_LENGTH = 12000;
+    /** 同一用户的岗位匹配必须串行，避免刷新页面后重复触发同一批 RAG 调用。 */
+    private static final Set<Long> RUNNING_JOB_MATCH_USERS = ConcurrentHashMap.newKeySet();
 
     private final ResumeStore resumeStore;
     private final JobMatchTaskStore jobMatchTaskStore;
@@ -93,7 +100,20 @@ public class ResumeApplicationService {
      */
     @Autowired(required = false)
     private AgentRunCoordinator agentRunCoordinator;
-    private final ConcurrentMap<Long, Boolean> embeddedResumeIds = new ConcurrentHashMap<>();
+    @Autowired
+    private JobDescriptionSafetyService jobDescriptionSafetyService = new JobDescriptionSafetyService();
+    @Autowired
+    private CareerJobMatchProperties jobMatchProperties = new CareerJobMatchProperties();
+    /**
+     * 已完成向量化的本机短期提示缓存，只用于减少同一进程内的重复写入。
+     *
+     * <p>向量库才是事实来源，因此缓存必须有容量和过期时间；不能用无界 Map 持有每一份历史简历的 ID，
+     * 否则长期运行的上传服务会持续占用堆内存。缓存淘汰后最多触发一次幂等重建，不影响数据正确性。</p>
+     */
+    private final Cache<Long, Boolean> embeddedResumeIds = Caffeine.newBuilder()
+            .maximumSize(5_000)
+            .expireAfterAccess(Duration.ofHours(6))
+            .build();
 
     @Autowired
     public ResumeApplicationService(
@@ -180,15 +200,42 @@ public class ResumeApplicationService {
 
     public JobMatchTaskResult matchResumes(Long userId, String jobDescription, List<Long> requestedResumeIds, int limit, Boolean ragOverride) {
         validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
+        JobDescriptionSafetyContext safety = jobDescriptionSafetyService.assess(jobDescription);
+        if (safety.rejected()) {
+            log.warn("岗位匹配已拒绝可疑 JD。用户编号={} 风险命中数={}", userId, safety.filteredInstructionCount());
+            throw new ClientException("岗位描述包含与招聘无关的指令性内容，且未识别到有效岗位要求，请修正后重试");
+        }
+        final String safeJobDescription = safety.safeRetrievalQuery();
         List<ResumeParseTaskRecord> selectedTasks = validateSelectedMatchResumes(userId, requestedResumeIds);
+        if (!RUNNING_JOB_MATCH_USERS.add(userId)) {
+            throw new ClientException("上一轮岗位匹配仍在执行，请等待完成后再开启下一轮");
+        }
         List<Long> selectedResumeIds = selectedTasks.stream().map(ResumeParseTaskRecord::resumeId).toList();
         String taskId = UUID.randomUUID().toString();
-        int boundedLimit = Math.min(limit <= 0 ? 3 : limit, 20);
-        JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId, selectedResumeIds);
-        jobMatchTaskStore.save(started, jobDescription, boundedLimit, null);
-        long start = System.currentTimeMillis();
+        int boundedLimit = jobMatchProperties.normalizeResultLimit(limit);
+        boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
         String sessionId = "job-match:" + taskId;
-        publishBusinessInvocationStarted(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", jobDescription);
+        String agentRunId = startAgentRun("JOB_MATCH", "JD_ALIGNMENT", userId, taskId, sessionId, taskId,
+                ragEnabled, "岗位上下文字段数=" + safety.structuredFieldsCount(),
+                "jdSafety=" + safety.decision() + ";context=" + safety.contextFingerprint());
+        recordAgentRunStage(agentRunId, "JD_SAFETY_CHECK", "岗位描述安全校验完成", Map.of(
+                "jdSafetyRiskDetected", safety.suspiciousInstructionDetected(),
+                "filteredInstructionCount", safety.filteredInstructionCount(),
+                "structuredFieldsCount", safety.structuredFieldsCount(),
+                "jdSafetyDecision", safety.decision().name(),
+                "riskLevel", safety.riskLevel().name(),
+                "riskSignals", safety.riskSignals().stream().map(Enum::name).toList(),
+                "normalizedInputDigest", safety.normalizedInputDigest(),
+                "degraded", safety.fallbackUsed(),
+                "fallbackUsed", safety.fallbackUsed(),
+                "contextFingerprint", safety.contextFingerprint()));
+        JobMatchTaskResult started = JobMatchTaskResult.started(taskId, userId, selectedResumeIds);
+        if (safety.filtered()) {
+            started = started.withSafetyNotice("已忽略与岗位无关的指令性内容，按提取到的岗位要求完成匹配。");
+        }
+        jobMatchTaskStore.save(started, safeJobDescription, boundedLimit, null);
+        long start = System.currentTimeMillis();
+        publishBusinessInvocationStarted(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", safeJobDescription);
         try {
             Map<Long, ResumeParseTaskRecord> tasksByResumeId = selectedTasks.stream()
                     .collect(java.util.stream.Collectors.toMap(ResumeParseTaskRecord::resumeId, task -> task, (left, right) -> left, LinkedHashMap::new));
@@ -196,23 +243,25 @@ public class ResumeApplicationService {
             selectedResumes.forEach(this::ensureResumeEmbedding);
             Set<String> resumeIds = selectedResumeIds.stream().map(String::valueOf)
                     .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-            boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
             List<ResumeRagMatch> ragMatches = resumeRagService.retrieveResumeMatches(
-                    jobDescription, boundedLimit, userId, resumeIds, ragEnabled, taskId, "JD_ALIGNMENT");
+                    safeJobDescription, boundedLimit, userId, resumeIds, ragEnabled, taskId, "JD_ALIGNMENT");
             Map<Long, CvBO> resumesById = selectedResumes.stream()
                     .collect(java.util.stream.Collectors.toMap(CvBO::getId, cv -> cv));
             if (!ragEnabled) {
                 ragMatches = selectedResumes.stream()
                         .map(cv -> new ResumeRagMatch(String.valueOf(cv.getId()),
-                                matchedTokens(jobDescription, String.valueOf(cv)).size(), List.of()))
+                                matchedTokens(safeJobDescription, String.valueOf(cv)).size(), List.of()))
                         .sorted(java.util.Comparator.comparingDouble(ResumeRagMatch::score).reversed())
                         .limit(boundedLimit)
                         .toList();
             }
-            List<JobMatchCandidate> candidates = toJobMatchCandidates(jobDescription, ragMatches, resumesById, tasksByResumeId);
+            List<JobMatchCandidate> candidates = toJobMatchCandidates(safeJobDescription, ragMatches, resumesById, tasksByResumeId);
             List<String> templates = ragMatches.stream().flatMap(match -> match.evidence().stream()).toList();
             JobMatchTaskResult completed = JobMatchTaskResult.completed(taskId, userId, selectedResumeIds, candidates, templates);
-            publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
+            if (safety.filtered()) {
+                completed = completed.withSafetyNotice("已忽略与岗位无关的指令性内容，按提取到的岗位要求完成匹配。");
+            }
+            publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", safeJobDescription,
                     "matched=" + candidates.size(), true, start, null, Map.of("userId", userId, "resumeScope", resumeIds.size()));
             publishBusinessInvocationCompleted(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", start,
                     "matched=" + candidates.size(), Map.of(
@@ -222,14 +271,20 @@ public class ResumeApplicationService {
                             "resumeScope", resumeIds.size(),
                             "resultCount", candidates.size()
                     ));
-            return jobMatchTaskStore.save(completed, jobDescription, boundedLimit, null);
+            succeedAgentRun(agentRunId, "岗位匹配已完成", Map.of("resultCount", candidates.size(), "durationMs", System.currentTimeMillis() - start,
+                    "ragEnabled", ragEnabled, "jdSafetyDecision", safety.decision().name()));
+            return jobMatchTaskStore.save(completed, safeJobDescription, boundedLimit, null);
         } catch (Exception ex) {
             log.warn("岗位匹配任务执行失败。任务编号={}", taskId, ex);
             JobMatchTaskResult failed = JobMatchTaskResult.failed(taskId, userId, selectedResumeIds, ex.getMessage());
-            publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", jobDescription,
+            publishTool(taskId, "job-match:" + taskId, "JD_ALIGNMENT", "resume-rag-match", safeJobDescription,
                     "FAILED", false, start, ex.getMessage(), Map.of("userId", userId));
             publishBusinessInvocationFailed(taskId, "JD_ALIGNMENT", sessionId, "岗位匹配 RAG", start, ex);
-            return jobMatchTaskStore.save(failed, jobDescription, boundedLimit, ex.getMessage());
+            failAgentRun(agentRunId, "岗位匹配失败", Map.of("durationMs", System.currentTimeMillis() - start,
+                    "jdSafetyDecision", safety.decision().name()));
+            return jobMatchTaskStore.save(failed, safeJobDescription, boundedLimit, ex.getMessage());
+        } finally {
+            RUNNING_JOB_MATCH_USERS.remove(userId);
         }
     }
 
@@ -269,6 +324,12 @@ public class ResumeApplicationService {
             Long userId, Long resumeId, String jobDescription, Consumer<CvReview> progressCallback, Boolean ragOverride) {
         long optimizationStart = System.currentTimeMillis();
         validateTextLength(jobDescription, MAX_JD_LENGTH, "Job description");
+        JobDescriptionSafetyContext safety = jobDescriptionSafetyService.assess(jobDescription);
+        if (safety.rejected()) {
+            log.warn("简历优化已拒绝可疑 JD。用户编号={} 简历编号={} 风险命中数={}", userId, resumeId, safety.filteredInstructionCount());
+            throw new ClientException("岗位描述包含与招聘无关的指令性内容，且未识别到有效岗位要求，请修正后重试");
+        }
+        final String safeJobDescription = safety.safeOptimizationContext();
         CvBO cv = getResume(userId, resumeId);
         ensureResumeEmbedding(cv);
         boolean ragEnabled = ragOverride == null ? resumeRagService.enabled() : ragOverride;
@@ -282,15 +343,26 @@ public class ResumeApplicationService {
                 optimizationSessionId,
                 optimizationTraceId,
                 ragEnabled,
-                "JD长度=" + jobDescription.length(),
+                "JD长度=" + safeJobDescription.length(),
                 "rag=" + ragEnabled + ";templateTopK=3"
         );
-        publishBusinessInvocationStarted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId, "简历优化 RAG", jobDescription);
+        recordAgentRunStage(agentRunId, "JD_SAFETY_CHECK", "岗位描述安全校验完成", Map.of(
+                "jdSafetyRiskDetected", safety.suspiciousInstructionDetected(),
+                "filteredInstructionCount", safety.filteredInstructionCount(),
+                "structuredFieldsCount", safety.structuredFieldsCount(),
+                "jdSafetyDecision", safety.decision().name(),
+                "riskLevel", safety.riskLevel().name(),
+                "riskSignals", safety.riskSignals().stream().map(Enum::name).toList(),
+                "normalizedInputDigest", safety.normalizedInputDigest(),
+                "degraded", safety.fallbackUsed(),
+                "fallbackUsed", safety.fallbackUsed(),
+                "contextFingerprint", safety.contextFingerprint()));
+        publishBusinessInvocationStarted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId, "简历优化 RAG", safeJobDescription);
         List<String> templates;
         try {
             recordAgentRunStage(agentRunId, "RAG_RETRIEVE", "开始检索简历优化证据", Map.of("ragEnabled", ragEnabled));
             templates = resumeRagService.retrieveTemplates(
-                    jobDescription, 3, userId, Set.of(String.valueOf(resumeId)), ragEnabled,
+                    safeJobDescription, 3, userId, Set.of(String.valueOf(resumeId)), ragEnabled,
                     optimizationTraceId, "RESUME_TAILOR");
             recordAgentRunStage(agentRunId, "RAG_RETRIEVE", "简历优化证据检索完成", Map.of("templateCount", templates.size()));
             publishBusinessInvocationCompleted(optimizationTraceId, "RESUME_TAILOR", optimizationSessionId,
@@ -330,7 +402,7 @@ public class ResumeApplicationService {
         CvOptimizationResult result;
         try {
             recordAgentRunStage(agentRunId, "AGENT_OPTIMIZE", "开始执行简历优化 Agent", Map.of());
-            result = cvOptimizationOrchestrator.optimize(cv, jobDescription, templates, memoryAwareProgressCallback);
+            result = cvOptimizationOrchestrator.optimize(cv, safeJobDescription, templates, memoryAwareProgressCallback);
             recordAgentRunStage(agentRunId, "AGENT_OPTIMIZE", "简历优化 Agent 执行完成", Map.of("iterations", result.iterations()));
         } catch (RuntimeException ex) {
             failAgentRun(agentRunId, "简历优化 Agent 执行失败：" + ex.getMessage(), Map.of("stage", "AGENT_OPTIMIZE"));
@@ -340,7 +412,8 @@ public class ResumeApplicationService {
         if (result.scoreGatePassed()) {
             resumeStore.save(latest);
             recordAgentRunStage(agentRunId, "PERSIST", "优化后的简历已持久化", Map.of("scoreGatePassed", true));
-            embeddedResumeIds.remove(resumeId);
+            // 优化后的正文已变化，旧的“已向量化”提示不再有效；主动失效后立即重建索引。
+            embeddedResumeIds.invalidate(resumeId);
             ensureResumeEmbedding(latest);
         }
         chatMemory.add(resumeMemoryId, MemoryMessage.builder()
@@ -357,16 +430,19 @@ public class ResumeApplicationService {
                 .scoreGatePassed(result.scoreGatePassed())
                 .failureReason(result.failureReason())
                 .reviewHistory(result.reviewHistory())
+                .safetyNotice(safety.filtered()
+                        ? "已忽略与岗位无关的指令性内容，按提取到的岗位要求完成优化。"
+                        : null)
                 .build();
         resumeParseTaskStore.findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name()).stream()
                 .filter(task -> resumeId.equals(task.resumeId()))
                 .findFirst()
-                .ifPresent(task -> resumeParseTaskStore.save(task.withOptimization(jobDescription, JSON.toJSONString(response))));
+                .ifPresent(task -> resumeParseTaskStore.save(task.withOptimization(safeJobDescription, JSON.toJSONString(response))));
         long durationMs = System.currentTimeMillis() - optimizationStart;
         log.info("性能指标 指标名称=简历优化完成 RAG开关={} 用户编号={} 简历编号={} 总耗时毫秒={} 迭代次数={} 评分达标={}",
                 ragEnabled, userId, resumeId, durationMs, response.iterations(), response.scoreGatePassed());
         publishTool(UUID.randomUUID().toString(), memoryId(resumeId), "RESUME_TAILOR", "resume-optimization-total",
-                jobDescription, "completed", true, optimizationStart, null,
+                safeJobDescription, "completed", true, optimizationStart, null,
                 Map.of("指标名称", "简历优化完成", "RAG开关", ragEnabled, "RAG来源", ragOverride == null ? "后端默认配置" : "前端单次选择", "用户编号", userId, "简历编号", resumeId,
                         "总耗时毫秒", durationMs, "迭代次数", response.iterations(),
                         "评分达标", Boolean.TRUE.equals(response.scoreGatePassed())));
@@ -639,7 +715,14 @@ public class ResumeApplicationService {
             if (task.status() == ResumeParseTaskStatus.SAVING && task.resumeId() != null) {
                 CvBO existing = resumeStore.findByIdAndUserId(task.resumeId(), task.userId())
                         .orElseThrow(() -> new IllegalStateException("Resume parse recovery failed: saved resume not found"));
+                // SAVING 阶段的恢复任务也可能在重试前被用户取消，不能继续触发自动标签或向量重建。
+                if (isCanceled(taskId, task.userId())) {
+                    return;
+                }
                 doEmbedding(existing, false);
+                if (isCanceled(taskId, task.userId())) {
+                    return;
+                }
                 resumeParseTaskStore.save(task.completed(existing.getId()));
                 publishParseMetric(task, existing.getId(), parseStart, true, null);
                 return;
@@ -652,12 +735,29 @@ public class ResumeApplicationService {
             }
             task = task.withStatus(ResumeParseTaskStatus.SAVING);
             resumeParseTaskStore.save(task);
+            // 用户可能在结构化解析完成后、写入简历前点击取消；此时必须阻断持久化，
+            // 避免“已取消”的任务仍创建一份候选简历。
+            if (isCanceled(taskId, task.userId())) {
+                return;
+            }
             CvBO saved = resumeStore.save(parsed.toBuilder()
                     .userId(task.userId())
                     .cvType(StringUtils.hasText(task.cvType()) ? task.cvType() : "upload")
                     .build());
-            if (ragResumeAutoTagService != null) ragResumeAutoTagService.generateAndReplace(saved);
+            // 保存本身无法强制回滚时，后续昂贵且有副作用的步骤必须遵从最新取消状态。
+            if (isCanceled(taskId, task.userId())) {
+                return;
+            }
+            if (ragResumeAutoTagService != null) {
+                ragResumeAutoTagService.generateAndReplace(saved);
+            }
+            if (isCanceled(taskId, task.userId())) {
+                return;
+            }
             doEmbedding(saved, false);
+            if (isCanceled(taskId, task.userId())) {
+                return;
+            }
             resumeParseTaskStore.save(task.completed(saved.getId()));
             publishParseMetric(task, saved.getId(), parseStart, true, null);
         } catch (Exception ex) {
@@ -755,7 +855,7 @@ public class ResumeApplicationService {
         String traceId = UUID.randomUUID().toString();
         try {
             List<ResumeChunk> chunks = resumeRagService.storeCvBO(cv);
-            embeddedResumeIds.put(cv.getId(), true);
+            embeddedResumeIds.put(cv.getId(), Boolean.TRUE);
             chatMemory.add(memoryId(cv.getId()), MemoryMessage.builder()
                     .role(MemoryRole.TOOL)
                     .content("Resume embedding completed. chunkCount=" + chunks.size())
@@ -777,10 +877,13 @@ public class ResumeApplicationService {
 
     private List<ResumeParseTaskRecord> validateSelectedMatchResumes(Long userId, List<Long> requestedResumeIds) {
         if (requestedResumeIds == null || requestedResumeIds.isEmpty()) {
-            throw new IllegalArgumentException("Select at least one completed resume before matching");
+            throw new IllegalArgumentException("请至少选择一份已解析完成的简历再进行岗位匹配");
         }
-        if (requestedResumeIds.size() > 20 || new LinkedHashSet<>(requestedResumeIds).size() != requestedResumeIds.size()) {
-            throw new IllegalArgumentException("Selected resume IDs must be unique and cannot exceed 20");
+        int maxCandidateResumes = jobMatchProperties.maxCandidateResumes();
+        if (!jobMatchProperties.allowsCandidateCount(requestedResumeIds.size())
+                || new LinkedHashSet<>(requestedResumeIds).size() != requestedResumeIds.size()) {
+            throw new IllegalArgumentException("参与岗位匹配的简历编号必须唯一，且数量不能超过当前配置的 "
+                    + maxCandidateResumes + " 份");
         }
         Map<Long, ResumeParseTaskRecord> completed = resumeParseTaskStore
                 .findByUserId(userId, ResumeParseTaskStatus.COMPLETED.name()).stream()
@@ -863,7 +966,7 @@ public class ResumeApplicationService {
     }
 
     private void ensureResumeEmbedding(CvBO cv) {
-        if (cv == null || cv.getId() == null || Boolean.TRUE.equals(embeddedResumeIds.get(cv.getId()))) {
+        if (cv == null || cv.getId() == null || Boolean.TRUE.equals(embeddedResumeIds.getIfPresent(cv.getId()))) {
             return;
         }
         doEmbedding(cv, false);
