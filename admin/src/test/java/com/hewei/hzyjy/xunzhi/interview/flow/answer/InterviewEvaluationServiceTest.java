@@ -31,79 +31,25 @@ import static org.mockito.Mockito.when;
 class InterviewEvaluationServiceTest {
 
     @Test
-    void preservesHighScoreFollowUpSignalReturnedByScorerWorkflow() throws Exception {
-        InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
-        InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
-        InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
-        AgentPropertiesDO agent = new AgentPropertiesDO();
-        String followUpQuestion = "在多轮对话中切换语言时，如何避免历史上下文干扰下一轮输出？";
-        when(cacheService.getSessionResumeContext("session-high-score")).thenReturn(Map.of());
-        when(historyProvider.load("session-high-score")).thenReturn(InterviewHistoryContext.empty());
-        when(aiInvoker.callAiSyncWithParameters(anyString(), eq(agent), anyMap(), anyString(), any()))
-                .thenReturn("{\"score\":92,\"logic_ok\":true,\"missing_points\":[],\"feedback\":\"项目过程清晰\",\"follow_up_needed\":true,\"follow_up_question\":\"在多轮对话中切换语言时，如何避免历史上下文干扰下一轮输出？\"}");
-
-        InterviewEvaluationService service = new InterviewEvaluationService(
-                cacheService,
-                aiInvoker,
-                new InterviewResponseParser(),
-                historyProvider
-        );
-
-        Map<String, Object> result = service.evaluateAnswer(
-                "session-high-score", "request-high-score", "1", "介绍多轮对话的实现", "项目过程清晰", agent);
-
-        assertEquals(92, result.get("score"));
-        assertTrue(Boolean.TRUE.equals(result.get("follow_up_needed")));
-        assertEquals(followUpQuestion, result.get("follow_up_question"));
-    }
-
-    @Test
-    void scorerWorkflowDeclaresHistoryInputAndHighScoreFollowUpContract() throws Exception {
+    void scorerWorkflowDoesNotDeclareHistoryInputInVersionedBaseline() throws Exception {
         String workflow = Files.readString(
                 Path.of("src/main/resources/workflow/用户答案评分官.yml"),
                 StandardCharsets.UTF_8
         );
 
-        int startNodeIndex = workflow.indexOf("id: node-start::d61b0f71-87ee-475e-93ba-f1607f0ce783");
-        int endNodeIndex = workflow.indexOf("id: node-end::cda617af-551e-462e-b3b8-3bb9a041bf88");
-        int llmNodeIndex = workflow.indexOf("id: spark-llm::3d610bd9-1432-4746-96dc-384cafb89313");
-        String startNode = workflow.substring(startNodeIndex, endNodeIndex);
-        String llmNode = workflow.substring(llmNodeIndex, workflow.indexOf("  edges:", llmNodeIndex));
-        String llmOutputs = llmNode.substring(llmNode.indexOf("      outputs:"), llmNode.indexOf("      nodeParam:"));
-
-        assertTrue(startNode.contains("name: interview_history_context"));
-        assertTrue(llmNode.contains("name: interview_history_context"));
-        assertTrue(llmNode.contains("id: 6f21e9b4-f816-4f4c-b80e-6c5e3d2cf0e1"));
-        assertTrue(llmNode.contains("<interview_history_context>{{interview_history_context}}</interview_history_context>"));
-        assertEquals(6, countOccurrences(llmOutputs, "        name: "));
-        assertTrue(llmOutputs.contains("name: score"));
-        assertTrue(llmOutputs.contains("name: logic_ok"));
-        assertTrue(llmOutputs.contains("name: missing_points"));
-        assertTrue(llmOutputs.contains("name: feedback"));
-        assertTrue(llmOutputs.contains("name: follow_up_needed"));
-        assertTrue(llmOutputs.contains("name: follow_up_question"));
-        assertFalse(llmOutputs.contains("follow_up_type"));
-        assertFalse(llmOutputs.contains("follow_up_focus"));
-        assertFalse(llmOutputs.contains("follow_up_reason"));
-        assertTrue(workflow.contains("score 仅评价当前回答质量"));
-        assertTrue(workflow.contains("即使 score >= 90"));
-        assertTrue(workflow.contains("follow_up_question 必须是围绕一个单一能力点"));
-        assertTrue(workflow.contains("禁止“请详细说明”"));
-        assertTrue(workflow.contains("不得因为高分而输出“无”"));
-        assertTrue(workflow.contains("不能因为历史中的高分而压制当前回答仍然值得继续的追问"));
-        assertTrue(workflow.contains("\"follow_up_needed\": true, \"follow_up_question\": \"请说明角色、资源范围与权限校验链路"));
+        assertFalse(workflow.contains("name: interview_history_context"));
+        assertFalse(workflow.contains("面试历史事实"));
     }
 
     @Test
-    void sendsHistoryProjectionToScorerWorkflow() throws Exception {
+    void doesNotSendHistoryProjectionToCurrentScorerWorkflow() throws Exception {
         InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
         InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
         InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
         AgentPropertiesDO agent = new AgentPropertiesDO();
-        InterviewHistoryContext historyContext = new InterviewHistoryContext(
-                true, 5L, 3L, List.of("1"), List.of(), List.of(), List.of(), List.of("2"));
         when(cacheService.getSessionResumeContext("session-1")).thenReturn(Map.of("summary", "Java backend developer"));
-        when(historyProvider.load("session-1")).thenReturn(historyContext);
+        when(historyProvider.load("session-1")).thenReturn(new InterviewHistoryContext(
+                true, 5L, 3L, List.of("1"), List.of(), List.of(), List.of(), List.of("2")));
         when(aiInvoker.callAiSyncWithParameters(anyString(), eq(agent), anyMap(), anyString(), any()))
                 .thenReturn("{\"score\":80,\"logic_ok\":true,\"missing_points\":[],\"feedback\":\"good\",\"follow_up_needed\":false,\"follow_up_question\":\"\"}");
 
@@ -119,69 +65,8 @@ class InterviewEvaluationServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> parameters = ArgumentCaptor.forClass(Map.class);
         verify(aiInvoker).callAiSyncWithParameters(anyString(), eq(agent), parameters.capture(), anyString(), any());
-        assertTrue(parameters.getValue().containsKey("interview_history_context"));
-        assertEquals(historyContext.toPromptText(1400), parameters.getValue().get("interview_history_context"));
+        assertFalse(parameters.getValue().containsKey("interview_history_context"));
         assertEquals("Java backend developer", parameters.getValue().get("resume_context"));
-    }
-
-    @Test
-    void continuesScoringWithEmptyHistoryWhenHistoryProviderThrows() throws Exception {
-        InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
-        InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
-        InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
-        AgentPropertiesDO agent = new AgentPropertiesDO();
-        when(cacheService.getSessionResumeContext("session-history-error")).thenReturn(Map.of());
-        when(historyProvider.load("session-history-error")).thenThrow(new IllegalStateException("history store timeout"));
-        when(aiInvoker.callAiSyncWithParameters(anyString(), eq(agent), anyMap(), anyString(), any()))
-                .thenReturn("{\"score\":80,\"logic_ok\":true,\"missing_points\":[],\"feedback\":\"good\",\"follow_up_needed\":false,\"follow_up_question\":\"\"}");
-
-        InterviewEvaluationService service = new InterviewEvaluationService(
-                cacheService, aiInvoker, new InterviewResponseParser(), historyProvider);
-
-        Map<String, Object> result = service.evaluateAnswer(
-                "session-history-error", "request-history-error", "1", "Explain Redis", "My answer", agent);
-
-        assertEquals(80, result.get("score"));
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> parameters = ArgumentCaptor.forClass(Map.class);
-        verify(aiInvoker).callAiSyncWithParameters(anyString(), eq(agent), parameters.capture(), anyString(), any());
-        assertEquals(InterviewHistoryContext.empty().toPromptText(1400),
-                parameters.getValue().get("interview_history_context"));
-    }
-
-    @Test
-    void continuesScoringWithEmptyHistoryWhenHistoryProviderReturnsNull() throws Exception {
-        InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
-        InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
-        InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
-        AgentPropertiesDO agent = new AgentPropertiesDO();
-        when(cacheService.getSessionResumeContext("session-history-null")).thenReturn(Map.of());
-        when(historyProvider.load("session-history-null")).thenReturn(null);
-        when(aiInvoker.callAiSyncWithParameters(anyString(), eq(agent), anyMap(), anyString(), any()))
-                .thenReturn("{\"score\":81,\"logic_ok\":true,\"missing_points\":[],\"feedback\":\"good\",\"follow_up_needed\":false,\"follow_up_question\":\"\"}");
-
-        InterviewEvaluationService service = new InterviewEvaluationService(
-                cacheService, aiInvoker, new InterviewResponseParser(), historyProvider);
-
-        Map<String, Object> result = service.evaluateAnswer(
-                "session-history-null", "request-history-null", "1", "Explain Redis", "My answer", agent);
-
-        assertEquals(81, result.get("score"));
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> parameters = ArgumentCaptor.forClass(Map.class);
-        verify(aiInvoker).callAiSyncWithParameters(anyString(), eq(agent), parameters.capture(), anyString(), any());
-        assertEquals(InterviewHistoryContext.empty().toPromptText(1400),
-                parameters.getValue().get("interview_history_context"));
-    }
-
-    private static int countOccurrences(String text, String fragment) {
-        int count = 0;
-        int index = 0;
-        while ((index = text.indexOf(fragment, index)) >= 0) {
-            count++;
-            index += fragment.length();
-        }
-        return count;
     }
 
     @Test

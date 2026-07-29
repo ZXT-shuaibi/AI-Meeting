@@ -68,7 +68,7 @@ public class InterviewEvaluationService {
             AgentPropertiesDO scorerAgent) {
 
         // 1) 先走评分工作流（带参数化上下文），拿标准结构化评分。
-        InterviewHistoryContext historyContext = loadHistoryContextSafely(sessionId);
+        InterviewHistoryContext historyContext = interviewHistoryContextProvider.load(sessionId);
         Map<String, Object> evaluationResult = evaluateAnswerByScorerAgent(
                 sessionId, requestId, questionNumber, questionContent, answerContent, scorerAgent, historyContext, false);
         // 评分器是远程工作流；修复重试必须沿用完整变量协议，不能只传自由文本，
@@ -215,31 +215,7 @@ public class InterviewEvaluationService {
         parameters.put(KEY_AGENT_USER_INPUT, answerContent);
         parameters.put(KEY_QUESTION, questionContent);
         parameters.put(KEY_RESUME_CONTEXT, resumeContextText);
-        parameters.put(KEY_INTERVIEW_HISTORY_CONTEXT, historyContextText);
         return parameters;
-    }
-
-    /**
-     * 读取历史投影仅用于补充评分上下文，不能成为评分主链路的单点依赖。
-     *
-     * <p>快照存储出现瞬时超时、读取异常或返回空值时，评分官仍可依据当前题目、回答和简历继续工作；
-     * 因而统一降级为空历史，而不是向调用方传播异常。日志只保留会话标识和异常类别，避免写入面试数据。</p>
-     */
-    private InterviewHistoryContext loadHistoryContextSafely(String sessionId) {
-        try {
-            InterviewHistoryContext historyContext = interviewHistoryContextProvider.load(sessionId);
-            if (historyContext != null) {
-                return historyContext;
-            }
-            log.warn("面试历史上下文为空，已降级为空历史继续评分，sessionId={}", sessionId);
-        } catch (Exception ex) {
-            log.warn(
-                    "面试历史上下文读取失败，已降级为空历史继续评分，sessionId={}，异常类型={}",
-                    sessionId,
-                    ex.getClass().getSimpleName()
-            );
-        }
-        return InterviewHistoryContext.empty();
     }
 
     private void logWorkflowParameters(
@@ -249,14 +225,19 @@ public class InterviewEvaluationService {
             String questionNumber,
             AgentPropertiesDO agent,
             Map<String, Object> parameters) {
-        Map<String, Object> parameterSummary = new LinkedHashMap<>();
+        Map<String, Object> debugView = new LinkedHashMap<>();
         if (parameters != null) {
             parameters.forEach((key, value) -> {
-                // 参数可能包含候选人回答、简历和历史面试事实；日志只记录存在性与长度，绝不写入正文。
-                Map<String, Object> metadata = new LinkedHashMap<>();
-                metadata.put("present", value != null);
-                metadata.put("length", value == null ? 0 : String.valueOf(value).length());
-                parameterSummary.put(key, metadata);
+                if (value == null) {
+                    return;
+                }
+                if (KEY_AGENT_USER_INPUT.equals(key)
+                        || KEY_RESUME_CONTEXT.equals(key)
+                        || KEY_INTERVIEW_HISTORY_CONTEXT.equals(key)) {
+                    debugView.put(key, clip(String.valueOf(value), 300));
+                    return;
+                }
+                debugView.put(key, value);
             });
         }
 
@@ -267,7 +248,7 @@ public class InterviewEvaluationService {
                 requestId,
                 questionNumber,
                 agent == null ? null : agent.getApiFlowId(),
-                JSON.toJSONString(parameterSummary)
+                JSON.toJSONString(debugView)
         );
     }
 

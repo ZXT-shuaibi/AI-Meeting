@@ -114,7 +114,7 @@ public class InterviewFollowUpRuleService {
 
     private int resolveDefaultMaxFollowUp() {
         Integer configured = ruleConfiguration.getDefaultMaxFollowUp();
-        return configured != null && configured > 0 ? configured : 4;
+        return configured != null && configured > 0 ? configured : 2;
     }
 
     private int resolveLowScoreThreshold() {

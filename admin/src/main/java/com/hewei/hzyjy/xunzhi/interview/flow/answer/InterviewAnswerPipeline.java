@@ -355,18 +355,6 @@ public class InterviewAnswerPipeline {
                 resolvedMaxFollowUp,
                 ruleDecision != null && ruleDecision.isFallback()
         );
-        // 仅记录评分官追问信号的结构摘要，便于排查“未进入提问官工作流”的原因，绝不记录问题正文、候选人回答或简历内容。
-        log.info(
-                "追问建议摘要，sessionId={}，requestId={}，题号={}，评分={}，评分官要求追问={}，建议问题存在={}，建议问题长度={}，缺失点数量={}",
-                ctx.sessionId,
-                ctx.requestId,
-                ctx.currentQuestionNumber,
-                ctx.score,
-                Boolean.TRUE.equals(ctx.followUpNeeded),
-                StrUtil.isNotBlank(ctx.followUpQuestion),
-                ctx.followUpQuestion == null ? 0 : ctx.followUpQuestion.length(),
-                ctx.missingPoints == null ? 0 : ctx.missingPoints.size()
-        );
 
         // 2) 按规则优先走追问分支；追问生成失败则自动回落到主问题推进分支。
         if (needFollowUp && ctx.currentFollowUpCount < resolvedMaxFollowUp) {
@@ -494,7 +482,7 @@ public class InterviewAnswerPipeline {
         ruleContext.setInterviewType(interviewQuestionCacheService.getSessionInterviewDirection(ctx.sessionId));
         ruleContext.setFollowUpQuestion(Boolean.TRUE.equals(ctx.currentIsFollowUp));
         ruleContext.setFollowUpCount(ctx.currentFollowUpCount == null ? 0 : Math.max(ctx.currentFollowUpCount, 0));
-        ruleContext.setMaxFollowUp(ctx.maxFollowUp == null ? 4 : Math.max(ctx.maxFollowUp, 1));
+        ruleContext.setMaxFollowUp(ctx.maxFollowUp == null ? 2 : Math.max(ctx.maxFollowUp, 1));
         ruleContext.setScore(ctx.score);
         ruleContext.setFollowUpNeededFromAi(Boolean.TRUE.equals(ctx.followUpNeeded));
         ruleContext.setMissingPoints(ctx.missingPoints);
@@ -579,7 +567,7 @@ public class InterviewAnswerPipeline {
 
     private int resolveMaxFollowUp(InterviewFlowState flowState) {
         if (flowState == null || flowState.getMaxFollowUp() == null || flowState.getMaxFollowUp() <= 0) {
-            return 4;
+            return 2;
         }
         return flowState.getMaxFollowUp();
     }

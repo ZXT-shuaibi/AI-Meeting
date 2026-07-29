@@ -59,16 +59,6 @@ flowData:
           default: ''
         required: false
         customParameterType: xfyun-file
-      - id: 6f21e9b4-f816-4f4c-b80e-6c5e3d2cf0e1
-        name: interview_history_context
-        nameErrMsg: ''
-        schema:
-          type: string
-          properties: [
-            ]
-          default: ''
-        required: false
-        customParameterType: xfyun-file
       nodeParam: {
         }
       icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/start-node-icon.png
@@ -289,19 +279,6 @@ flowData:
               nodeId: node-start::d61b0f71-87ee-475e-93ba-f1607f0ce783
             contentErrMsg: ''
         fileType: ''
-      - id: 318f1e0a-3bfd-4373-9d33-6d8935595b12
-        name: interview_history_context
-        nameErrMsg: ''
-        schema:
-          type: string
-          value:
-            type: ref
-            content:
-              name: interview_history_context
-              id: 6f21e9b4-f816-4f4c-b80e-6c5e3d2cf0e1
-              nodeId: node-start::d61b0f71-87ee-475e-93ba-f1607f0ce783
-            contentErrMsg: ''
-        fileType: ''
       outputs:
       - id: ddcd3fed-e884-4064-86e6-8dc84d9b140d
         name: score
@@ -359,7 +336,6 @@ flowData:
           题目：{{question}}
           答案：{{answer}}
           简历上下文:{{resume_context}}
-          <interview_history_context>{{interview_history_context}}</interview_history_context>
 
           请按要求返回JSON。
         modelId: 10000021
@@ -389,14 +365,6 @@ flowData:
         systemTemplate: |
           你是严格的技术面试评分器。仅根据题目和答案评分，不做寒暄。
           必须输出严格JSON格式字符串，不允许任何JSON外的文本、注释、换行或多余符号。
-
-          ## 评分与追问的职责边界
-          1. score 仅评价当前回答质量，不能单独决定是否追问。
-          2. 即使 score >= 90，只要还存在一个独立、可验证且高价值的能力点尚未验证透，follow_up_needed 仍应为 true。
-          3. 可追问的情形包括：方案已说明但实现机制未说明；说明做了什么但未讲技术取舍；困难处理缺少问题定位、验证方式、边界条件或复盘；个人贡献边界不清；主问题基本答完但仍有实现、边界、决策、验证或业务判断点可继续核验。
-          4. 只有主问题对应的核心能力已经充分证明，继续追问只会重复，或确实没有具体能力点可追问时，follow_up_needed 才为 false。
-          5. follow_up_question 必须是围绕一个单一能力点、紧扣题目和回答的具体中文问题；禁止“请详细说明”“能展开说说吗”等泛问；不得因为高分而输出“无”。
-          6. interview_history_context 仅用于避免重复验证已确认的能力点，不能因为历史中的高分而压制当前回答仍然值得继续的追问。
 
           ## 评分规则
           1. 评分范围 0-100，维度与权重：
@@ -431,7 +399,7 @@ flowData:
           {"score": 0, "logic_ok": false, "missing_points": ["未提供需要评分的面试题目和答案"], "feedback": "缺少评分所需的核心内容，无法完成维度评估", "follow_up_needed": true, "follow_up_question": "请提供技术面试题目及对应的面试者答案文本"}
 
           示例3（答案完全错误）：
-          {"score": 15, "logic_ok": false, "missing_points": ["未说明角色与资源范围的对应关系", "未说明权限控制流程中的校验链路"], "feedback": "答案未建立角色、资源与权限校验之间的正确关系，逻辑不完整", "follow_up_needed": true, "follow_up_question": "请说明角色、资源范围与权限校验链路在一次访问请求中如何依次串联？"}
+          {"score": 15, "logic_ok": false, "missing_points": ["核心知识点理解错误", "逻辑推导完全偏离"], "feedback": "答案与正确解法完全不符，逻辑混乱", "follow_up_needed": false, "follow_up_question": "无"}
 
           ## 强制校验项
           1. 所有字段必须符合指定类型，禁止将数字/布尔/数组类型字段赋值为空字符串；

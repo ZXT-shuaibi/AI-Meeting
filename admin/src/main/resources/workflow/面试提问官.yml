@@ -89,26 +89,6 @@ flowData:
           default: ''
         required: false
         customParameterType: xfyun-file
-      - id: 4c1e670f-5199-4b62-9110-b5e58544b7dc
-        name: interview_history_context
-        nameErrMsg: ''
-        schema:
-          type: string
-          properties: [
-            ]
-          default: ''
-        required: false
-        customParameterType: xfyun-file
-      - id: 5976fb76-bb58-4ee4-bc0a-69673e746910
-        name: follow_up_question
-        nameErrMsg: ''
-        schema:
-          type: string
-          properties: [
-            ]
-          default: ''
-        required: false
-        customParameterType: xfyun-file
       nodeParam: {
         }
       icon: https://oss-beijing-m8.openstorage.cn/pro-bucket/sparkBot/common/workflow/icon/start-node-icon.png
@@ -329,32 +309,6 @@ flowData:
               nodeId: node-start::d61b0f71-87ee-475e-93ba-f1607f0ce783
             contentErrMsg: ''
         fileType: ''
-      - id: d6ced258-5b4f-416b-8ac8-6aa8a54e1f90
-        name: interview_history_context
-        nameErrMsg: ''
-        schema:
-          type: string
-          value:
-            type: ref
-            content:
-              name: interview_history_context
-              id: 4c1e670f-5199-4b62-9110-b5e58544b7dc
-              nodeId: node-start::d61b0f71-87ee-475e-93ba-f1607f0ce783
-            contentErrMsg: ''
-        fileType: ''
-      - id: e7bc880f-765b-4c7e-bbe5-ee2d7c4fa405
-        name: follow_up_question
-        nameErrMsg: ''
-        schema:
-          type: string
-          value:
-            type: ref
-            content:
-              name: follow_up_question
-              id: 5976fb76-bb58-4ee4-bc0a-69673e746910
-              nodeId: node-start::d61b0f71-87ee-475e-93ba-f1607f0ce783
-            contentErrMsg: ''
-        fileType: ''
       - id: 845c10aa-63f2-4fb3-8ca8-dc2c070b6be0
         name: max_follow_up
         nameErrMsg: ''
@@ -410,8 +364,6 @@ flowData:
           question={{question}}
           AGENT_USER_INPUT={{AGENT_USER_INPUT}}
           resume_context={{resume_context}}
-          interview_history_context={{interview_history_context}}
-          follow_up_question={{follow_up_question}}
 
           请严格按系统规则直接输出结果。
 
@@ -441,7 +393,7 @@ flowData:
           - 只输出一行纯文本。
           - 不输出JSON、不输出解释、不输出Markdown、不换行。
           - 仅允许两种输出：
-            1) 一条追问句（中文，25-80字，必须以“？”结尾）
+            1) 一条追问句（中文，40-60字，必须以“？”结尾）
             2) __FINISH__
 
           【输入变量】
@@ -451,14 +403,6 @@ flowData:
           - question
           - AGENT_USER_INPUT
           - resume_context
-          - interview_history_context
-          - follow_up_question
-
-          【评分官建议追问】
-          当 follow_up_question 非空时，它是评分官已识别出的唯一追问焦点。必须优先围绕该问题生成追问，
-          仅可在不改变焦点的前提下润色；不得改问其他维度，也不得因为当前回答得分较高而输出 __FINISH__。
-          当 follow_up_question 为空时，才可依据当前题目、回答、简历与 interview_history_context 选择一个未被充分验证的焦点。
-          interview_history_context 仅用于避免重复验证，不得因为历史高分压制当前仍有价值的追问。
 
           【决策规则】
           1) 若 mode=FINISH，输出 __FINISH__
@@ -683,7 +627,7 @@ flowData:
           def main(raw_text, mode, follow_up_count, max_follow_up, question):
               m = _s(mode).upper()
               c = _to_int(follow_up_count, 0)
-              mx = _to_int(max_follow_up, 4)
+              mx = _to_int(max_follow_up, 2)
 
               # 流程控制
               if m != "FOLLOW_UP" or m == "FINISH":

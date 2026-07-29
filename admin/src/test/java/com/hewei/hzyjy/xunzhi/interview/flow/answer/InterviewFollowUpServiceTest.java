@@ -14,7 +14,6 @@ import org.mockito.ArgumentCaptor;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,7 +27,7 @@ import static org.mockito.Mockito.when;
 class InterviewFollowUpServiceTest {
 
     @Test
-    void sendsHistoryProjectionAndScorerSuggestedQuestionToFollowUpWorkflow() throws Exception {
+    void doesNotSendHistoryProjectionToCurrentFollowUpWorkflow() throws Exception {
         BusinessAgentResolver resolver = mock(BusinessAgentResolver.class);
         InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
         InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
@@ -49,46 +48,15 @@ class InterviewFollowUpServiceTest {
                 historyProvider
         );
 
-        String suggestedQuestion = "在发生主从延迟时，你如何验证读写一致性没有被破坏？";
         InterviewFollowUpService.FollowUpQuestionResult result = service.generateFollowUpQuestion(
-                "session-1", "request-1", "1", "Explain transactions", "My answer", suggestedQuestion, 0, 4);
+                "session-1", "request-1", "1", "Explain transactions", "My answer", null, 0, 2);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> parameters = ArgumentCaptor.forClass(Map.class);
         verify(aiInvoker).callAiSyncWithParameters(eq("session-1"), eq(agent), parameters.capture(), anyString(), any());
         assertTrue(result.hasQuestion());
-        assertEquals(suggestedQuestion, parameters.getValue().get("follow_up_question"));
-        assertEquals(new InterviewHistoryContext(
-                true, 5L, 3L, List.of("1"), List.of(), List.of(), List.of(), List.of("2"))
-                        .toPromptText(1400),
-                parameters.getValue().get("interview_history_context"));
+        assertFalse(parameters.getValue().containsKey("interview_history_context"));
         assertFalse(String.valueOf(parameters.getValue().get("resume_context")).contains("uncovered_question_numbers"));
-    }
-
-    @Test
-    void fallsBackToScorerSuggestedQuestionWhenRemoteGeneratorEndsInterview() throws Exception {
-        BusinessAgentResolver resolver = mock(BusinessAgentResolver.class);
-        InterviewQuestionCacheService cacheService = mock(InterviewQuestionCacheService.class);
-        InterviewAiInvoker aiInvoker = mock(InterviewAiInvoker.class);
-        InterviewHistoryContextProvider historyProvider = mock(InterviewHistoryContextProvider.class);
-        AgentPropertiesDO agent = new AgentPropertiesDO();
-        String suggestedQuestion = "在发生主从延迟时，你如何验证读写一致性没有被破坏？";
-        when(resolver.resolveRequired(BusinessAgentScene.INTERVIEW_QUESTION_ASKING)).thenReturn(agent);
-        when(cacheService.getSessionResumeContext("session-fallback")).thenReturn(Map.of());
-        when(historyProvider.load("session-fallback")).thenReturn(InterviewHistoryContext.empty());
-        when(aiInvoker.callAiSyncWithParameters(anyString(), eq(agent), anyMap(), anyString(), any()))
-                .thenReturn("{\"end_interview\":true,\"ask_to_user\":\"\"}");
-
-        InterviewFollowUpService service = new InterviewFollowUpService(
-                resolver, cacheService, aiInvoker, new InterviewResponseParser(), historyProvider);
-
-        InterviewFollowUpService.FollowUpQuestionResult result = service.generateFollowUpQuestion(
-                "session-fallback", "request-fallback", "1", "Explain transactions", "My answer", suggestedQuestion, 0, 4);
-
-        assertTrue(result.hasQuestion());
-        assertEquals("1-F1", result.getQuestionNumber());
-        assertEquals(1, result.getFollowUpCount());
-        assertEquals(suggestedQuestion, result.getQuestionContent());
     }
 
     @Test
